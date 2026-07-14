@@ -54,9 +54,57 @@ if(WIN32)
     target_link_libraries(radar_full PRIVATE ws2_32)
 endif()
 
+# ==========================================================================
+# target 3: radar_core_tests —— 新架构基础组件单元测试（Phase 0-2 地基）
+#   纯标准库、无硬件依赖，验证：wrap-safe seq、有界阻塞 SPSC（满则阻塞不丢、
+#   跨线程严格 FIFO）、连续内存 FrameBuffer、BufferPool 复用、RadarConfig 派生/校验。
+# ==========================================================================
+set(NEWSRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(radar_core_tests
+    ${NEWSRC_DIR}/tests/test_core.cpp
+    ${NEWSRC_DIR}/core/RadarConfig.cpp
+)
+target_include_directories(radar_core_tests PRIVATE ${NEWSRC_DIR})
+target_compile_features(radar_core_tests PRIVATE cxx_std_17)
+target_link_libraries(radar_core_tests PRIVATE Threads::Threads)
+
+enable_testing()
+add_test(NAME radar_core_tests COMMAND radar_core_tests)
+
+# ==========================================================================
+# target 4: radar_pipeline_tests —— Phase 3 流水线骨架单测（无硬件）
+#   验证：ParseStage I/Q 反交织（单/全 Rx）、Pipeline 保序与无损（小环制造回压）。
+# ==========================================================================
+add_executable(radar_pipeline_tests
+    ${NEWSRC_DIR}/tests/test_pipeline.cpp
+    ${NEWSRC_DIR}/pipeline/ParseStage.cpp
+    ${NEWSRC_DIR}/pipeline/Pipeline.cpp
+    ${NEWSRC_DIR}/core/RadarConfig.cpp
+)
+target_include_directories(radar_pipeline_tests PRIVATE ${NEWSRC_DIR})
+target_compile_features(radar_pipeline_tests PRIVATE cxx_std_17)
+target_link_libraries(radar_pipeline_tests PRIVATE Threads::Threads)
+add_test(NAME radar_pipeline_tests COMMAND radar_pipeline_tests)
+
+# ==========================================================================
+# target 5: radar_spool_tests —— Phase 2 两级无损 FrameSpool 单测（无硬件）
+#   验证：RAM→磁盘溢写的 FIFO 保序与逐字节一致、确实发生溢写、排空后回用 RAM、close 唯醒。
+# ==========================================================================
+add_executable(radar_spool_tests
+    ${NEWSRC_DIR}/tests/test_spool.cpp
+    ${NEWSRC_DIR}/transport/FrameSpool.cpp
+)
+target_include_directories(radar_spool_tests PRIVATE ${NEWSRC_DIR})
+target_compile_features(radar_spool_tests PRIVATE cxx_std_17)
+target_link_libraries(radar_spool_tests PRIVATE Threads::Threads)
+add_test(NAME radar_spool_tests COMMAND radar_spool_tests)
+
 # ---- 构建提示 ----
 message(STATUS "==============================================================")
 message(STATUS " ${PROJECT_NAME} configured for ${CMAKE_SYSTEM_NAME}")
-message(STATUS "   test_udp   : 网络采集链路测试（三平台）")
-message(STATUS "   radar_full : 完整程序（含串口链，三平台）")
+message(STATUS "   test_udp        : 网络采集链路测试（三平台）")
+message(STATUS "   radar_full      : 完整程序（含串口链，三平台）")
+message(STATUS "   radar_core_tests: 新架构基础组件单测（三平台）")
+message(STATUS "   radar_pipeline_tests: 流水线骨架单测（三平台）")
+message(STATUS "   radar_spool_tests   : 两级无损 FrameSpool 单测（三平台）")
 message(STATUS "==============================================================")
