@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: realtime_pipeline
+title: 实时数据流水线与雷达配置
+scope:
+    - awr1843_dca1000_read/RealTimeProcessor.h
+    - awr1843_dca1000_read/cf.json
+    - awr1843_dca1000_read/awr1843.cfg
+source_files: []
+depends_on: []
+related_to: []

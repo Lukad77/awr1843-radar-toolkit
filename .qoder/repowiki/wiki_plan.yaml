@@ -1,0 +1,106 @@
+version: 1
+
+# ---------------------------------------------------------------------------
+# 文件范围：聚焦源码目录与根级文档，排除二进制/IDE 工程噪音。
+# 主源码树位于 awr1843_dca1000_read/（.h 与 .cpp 同层）。
+# ---------------------------------------------------------------------------
+scope:
+  include:
+    - "awr1843_dca1000_read/**"
+    - "CMakeLists.txt"
+    - "README.md"
+  exclude:
+    - "**/*.vsdx"      # Visio 流程图（二进制，无法文本化）
+    - "**/*.sln"       # Visual Studio 解决方案
+    - "**/*.vcxproj*"  # MSVC 工程文件（低信噪比）
+
+repowiki:
+  # 代码/技术架构分析预设：自动套用配套的章节骨架与规范（按构建输出语言渲染）。
+  template: architecture
+
+  notes:
+    - text: "本项目是 TI AWR1843 毫米波雷达 + DCA1000 采集卡的原始数据采集/解析工具，C++17，仅依赖标准库，无第三方库。"
+    - text: "多数旧版 .h/.cpp 中的中文注释以 GBK 存储，被按 UTF-8 读取时显示为乱码，这是编码问题而非代码缺陷，撰写文档时不要把乱码当作 bug 或有效内容。"
+    - text: "项目由最初的 Windows-only 版本分阶段跨平台改造而来；net_compat.h、WzSerialportPlus 的 POSIX(termios) 分支、test_udp_main.cpp 是新增的跨平台组件，注释为正常 UTF-8。"
+    - text: "存在三条独立通信通道：UDPController 走 DCA1000 命令口 4096；UDPReceiver 走数据口 4098；AWR1843Controller 走串口(CLI 115200 / 数据口 921600)。不要混淆。"
+    - text: "网络地址约定：上位机 IP 192.168.33.30，DCA1000 IP 192.168.33.180。帧字节数 = numRX × numChirpsEachFrame × numADCSamples × 4（每采样点 2×int16 的 I/Q）。"
+    - text: "AWR1843Controller 是 header-only 实现：控制逻辑全在 AWR1843Controller.h，同名 .cpp 近乎为空。描述该模块时以头文件为准。"
+    - text: "CMakeLists.txt 定义两个目标：test_udp（不含串口链、三平台可构建，配合 Python 回放泵测试 UDP→重组→解析）与 radar_full（含串口链的完整程序）。"
+    - text: "awr1843_dca1000_read.cpp 用 #if 0/#if 1 切换两种 main：#if 0 为实时采集、#if 1（当前默认）为离线 bin→CSV 解析。"
+    - text: "雷达配置文件(1T1R.cfg/awr1843.cfg)为 mmWave CLI 命令逐行文本，由 AWR1843Controller.initialize()/configureRadar() 读取下发，parseConfigParams() 从 profileCfg/frameCfg/channelCfg 行推导距离/多普勒分辨率等参数；cf.json 是 DCA1000 采集参数(LVDS/以太网流)。讲解配置务必关联这些解析代码。"
+    - text: "网络数据链路按两层组织：第1层「数据接收与帧重组」(UDPReceiver 数据口4098 + UnlockQueue + seqNum 重组，以 net_compat 跨平台 socket 为基础)负责搬运原始字节；第2层「雷达数据解析」(DataParser)负责把字节还原为复数 I/Q。注意：DCA1000 的 UDP 命令控制(UDPController，命令口4096)属于设备控制而非数据通路，不归入本链路。"
+    - text: "设备控制统一成章：DCA1000 的网络命令控制(UDPController，命令口4096)与 AWR1843 的串口控制(WzSerialportPlus/适配器/AWR1843Controller)同属'配置/启停设备'语义，归入同一「雷达与 DCA1000 设备控制」章节；数据接收(UDPReceiver，数据口4098)不属于控制，勿混入。"
+    - text: "后续新增的数据处理流程(如 Range-FFT/Doppler-FFT/CFAR/目标检测)统一接入点：实时链路在 RealTimeDataProcessor::ProcessingLoop 中 parse_FrameData 成功之后，以 DataParser 的输出类型 FrameDataSingleRx/FrameDataAllRx 作为级间接口；离线链路接在 main(#if 1) 的 parse 之后。扩展文档需给出该接入点与数据契约，而非凭空新建流水线。"
+
+  documents:
+    - title: "项目概述与整体架构"
+      goal: "说明项目定位（AWR1843+DCA1000 原始数据采集/解析）、技术栈、目录结构，并给出命令/数据/串口三通道并行的整体架构与模块关系总览。"
+      parent: ""
+      hints: "README.md, CMakeLists.txt, 目录结构；三通道分离；设计模式(单例/观察者/适配器/生产者消费者)概览"
+
+    - title: "构建系统与运行入口"
+      goal: "解析 CMakeLists.txt 的跨平台配置、test_udp 与 radar_full 两个构建目标的源文件组成与用途，以及主程序 #if 0(实时采集)/#if 1(离线解析) 两种运行模式。"
+      parent: ""
+      hints: "CMakeLists.txt, awr1843_dca1000_read.cpp, test_udp_main.cpp; Threads/ws2_32 链接; 平台差异"
+
+    - title: "网络数据链路与解析"
+      goal: "统领从数据接收到解析的两层结构：下层数据接收与帧重组负责跨平台 socket 收取 LVDS 数据流并按 seqNum 还原成帧，上层雷达数据解析把原始字节还原为复数 I/Q。给出两层的职责边界与自下而上的数据流协作关系。本链路只含数据通路，DCA1000 命令控制归入设备控制章节。"
+      parent: ""
+      hints: "数据口4098; net_compat 为跨平台基础; UDPReceiver/UnlockQueue → DataParser 分层; 不含命令口4096"
+
+    - title: "数据接收与帧重组"
+      goal: "第 1 层（数据接收层）：讲解 UDPReceiver 经数据口 4098 接收 DCA1000 的 LVDS 数据流(三种接收模式、包结构 seqNum+byteCnt+payload)、UnlockQueue 无锁环形队列缓冲，以及基于 seqNum 的跨帧重组算法(SortPackets)；以 net_compat.h 跨平台 socket 层为基础。此为纯数据通路，不含设备控制命令。"
+      parent: "网络数据链路与解析"
+      hints: "UdpReceiver.cpp/.h, unlock_queue.h, net_compat.h; QUEUE_BASED; ReceiveThreadFunc/GetFramesFromQueue; SortPackets; seqNum 帧边界"
+
+    - title: "雷达数据解析"
+      goal: "第 2 层（解析层）：说明 DataParser 如何把数据接收层交付的原始 ADC 字节流解析为复数 I/Q，含单天线(parse_FrameData)与全天线(parse_FrameData_AllRX)两种输出、I/Q 交织格式(每 2 sample 占 4 int16)与 RadarParams 参数、expectSize_ 校验。"
+      parent: "网络数据链路与解析"
+      hints: "DataParser.cpp/.h, RadarParams.h; parse_RxChannel; complex<float>; 输入来自 UDPReceiver 重组后的帧"
+
+    - title: "雷达与 DCA1000 设备控制"
+      goal: "设备控制章节总览：把针对 DCA1000 的 UDP 命令控制与针对 AWR1843 的串口控制归为同一'配置/启停设备'语义域，说明两条控制通道(命令口4096 / 串口)的职责、共性与区别，并与数据接收通路(数据口4098)明确区分。"
+      parent: ""
+      hints: "UDPController + AWR1843Controller; 命令口4096 vs 串口(CLI115200/数据口921600); 控制 ≠ 数据接收(4098)"
+
+    - title: "DCA1000 命令控制"
+      goal: "描述 UDPController 通过命令口 4096 向 DCA1000 发送控制命令的协议(5aa5 header + cmd + length + body + aaee footer)、CommandCode 命令集(复位/配置/启停录制等)与收发/超时处理，底层依赖 net_compat.h 跨平台 socket。"
+      parent: "雷达与 DCA1000 设备控制"
+      hints: "UDPController.cpp/.h, net_compat.h; CommandCode 枚举; _sendCMD/_sendTo; 复位/配置/启停录制"
+
+    - title: "串口通信与 AWR1843 雷达控制"
+      goal: "梳理串口栈：SerialPort 抽象基类 → WzSerialPortAdapter 适配器 → WzSerialportPlus 底层驱动；以及 AWR1843Controller 的双串口设计(CLI/数据)、cfg 配置下发、参数计算与 TLV 帧(parseData18xx)解析。"
+      parent: "雷达与 DCA1000 设备控制"
+      hints: "WzSerialportPlus.cpp/.h, WzSerialPortAdapter.h, SerialPort.h, AWR1843Controller.h; CLI/数据双口; MAGIC_WORD/TLV"
+
+    - title: "跨平台兼容性设计"
+      goal: "解释 net_compat.h 如何将 winsock2 与 BSD socket 差异收口(SOCKET 类型统一、net_* 辅助函数)，以及串口层 Win32(DCB/ReadFile) 与 POSIX(termios/read) 的双实现与 SO_RCVTIMEO 差异处理。"
+      parent: ""
+      hints: "net_compat.h; #ifdef _WIN32; typedef SOCKET; ioctlsocket vs fcntl; SerialHandle"
+
+    - title: "日志系统"
+      goal: "分析 Logger.h 的多线程安全日志：单例 Logger、观察者模式的 LogSink(ConsoleSink/FileSink)、LogQueue 生产者-消费者异步写出，以及 {} 占位符变参模板格式化与日志级别。"
+      parent: ""
+      hints: "Logger.h; getInstance; LogSink/ConsoleSink/FileSink; LogQueue+worker_thread; format_Message"
+
+    - title: "实时处理流水线与数据流"
+      goal: "描述 RealTimeDataProcessor 如何串联 UDPReceiver 与 DataParser，批量(FRAME_BATCH_SIZE)累积后落盘(解析后复数 / 原始 ADC 两种写盘模式)，并给出实时采集端到端数据流时序。"
+      parent: ""
+      hints: "RealTimeProcessor.h; ProcessingLoop; WriteParsedFramesToFile/writeBufferToFile; 与 main 实时分支的调用关系"
+
+    - title: "数据处理流程扩展开发指南"
+      goal: "面向二次开发：说明后续新增的数据处理流程(如 Range-FFT/Doppler-FFT/CFAR/点云检测)如何接入现有流水线。明确规范接入点：实时链路在 RealTimeDataProcessor::ProcessingLoop 中 parse_FrameData 成功产出复数帧之后插入新处理级，离线链路在 main(#if 1) 的 parse 之后；级间数据契约统一用 DataParser 输出类型 FrameDataSingleRx/FrameDataAllRx；并给出配置(RadarParams)、批量落盘(WriteParsedFramesToFile 模式)、日志(Logger)、线程与锁(bufferMutex/fileMutex)等配套约定，以及新增一个算法级的步骤与注意事项。"
+      parent: ""
+      hints: "RealTimeProcessor.h ProcessingLoop 接入点; DataParser 输出 FrameDataSingleRx/FrameDataAllRx 作级间接口; 离线 main #if 1 后处理; WriteParsedFramesToFile 落盘约定; RadarParams 配置; Logger; FRAME_BATCH_SIZE"
+
+    - title: "雷达与采集参数配置文件"
+      goal: "讲解 1T1R.cfg / awr1843.cfg 的 mmWave CLI 命令(dfeDataOutputMode/channelCfg/profileCfg/chirpCfg/frameCfg/sensorStart 等)含义与关键字段，说明 AWR1843Controller 如何读取下发并由 profileCfg/frameCfg/channelCfg 推导距离分辨率、多普勒分辨率、最大距离/速度等雷达参数；并解释 cf.json 中 DCA1000 的 LVDS/以太网流/dataFormatMode/packetDelay 等采集配置。"
+      parent: ""
+      hints: "1T1R.cfg, awr1843.cfg, cf.json; AWR1843Controller.initialize/configureRadar/parseConfigParams; profileCfg/frameCfg/channelCfg 字段映射; 与 RadarParams 的对应"
+
+knowledgecard:
+  notes:
+    - text: "按功能域切分知识卡：①UDP接收与帧重组(UdpReceiver+unlock_queue) ②数据解析(DataParser+RadarParams) ③DCA1000命令控制(UDPController) ④串口与雷达控制(WzSerialportPlus/WzSerialPortAdapter/SerialPort/AWR1843Controller) ⑤跨平台兼容(net_compat.h) ⑥日志(Logger.h) ⑦实时流水线(RealTimeProcessor)。"
+    - text: "命令通道(UDPController:4096)、数据通道(UDPReceiver:4098)、串口通道(AWR1843Controller) 是三个相互独立的模块，制卡时不要合并为单一网络模块。"
+    - text: "AWR1843Controller 逻辑集中在头文件(header-only)，同名 .cpp 近乎为空；DataParser 与 UDPController 才是 .h/.cpp 分离实现。"
+    - text: "旧文件中文注释为 GBK 乱码，非有效语义，制卡时忽略乱码内容，以代码逻辑与函数签名为准。"

@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: dca1000_command
+title: DCA1000 命令控制通道（UDPController）
+scope:
+    - awr1843_dca1000_read/UDPController.h
+    - awr1843_dca1000_read/UDPController.cpp
+    - awr1843_dca1000_read/net_compat.h
+source_files: []
+depends_on: []
+related_to: []

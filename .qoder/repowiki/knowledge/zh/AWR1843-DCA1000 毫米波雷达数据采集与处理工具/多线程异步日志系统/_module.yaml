@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: logger
+title: 多线程异步日志系统
+scope:
+    - awr1843_dca1000_read/Logger.h
+    - awr1843_dca1000_read/awr1843_dca1000_read.cpp
+    - awr1843_dca1000_read/test_udp_main.cpp
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: data_parser
+title: 雷达原始数据解析器(DataParser)
+scope:
+    - awr1843_dca1000_read/DataParser.h
+    - awr1843_dca1000_read/DataParser.cpp
+    - awr1843_dca1000_read/RadarParams.h
+source_files: []
+depends_on: []
+related_to: []
