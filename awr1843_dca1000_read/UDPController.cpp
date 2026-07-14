@@ -7,7 +7,7 @@
 #include <chrono>
 #include <thread>   
 namespace Radar {
-    //³õÊ¼»¯ÍøÂçÍ¨ÐÅ¿â
+    //ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¨ï¿½Å¿ï¿½
 #ifdef _WIN32
     bool UDPController::wsaInitialized_ = false;
     void UDPController::initializeWSA() {
@@ -16,7 +16,7 @@ namespace Radar {
             if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
                 throw std::system_error(WSAGetLastError(), std::system_category(), "WSAStartup failed");
             }
-            std::cout << "³õÊ¼»¯¿â³É¹¦" << std::endl;
+            std::cout << "ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½É¹ï¿½" << std::endl;
             wsaInitialized_ = true;
         }
     }
@@ -24,7 +24,7 @@ namespace Radar {
     void UDPController::_close()
     {
         if (_sockfd != INVALID_SOCKET) {
-            closesocket(_sockfd);
+            netcompat::net_close(_sockfd);
             _sockfd = INVALID_SOCKET;
         }
     }
@@ -38,21 +38,21 @@ namespace Radar {
         if (_sockfd == INVALID_SOCKET) {
             throw std::system_error(errno, std::system_category(), "Socket creation failed");
         }
-        std::cout << "´´½¨UDP SOCKET ³É¹¦" << std::endl;
-        // °ó¶¨±¾µØIPºÍ¶Ë¿Ú£¨ÐÂÔö´úÂë£©
+        std::cout << "ï¿½ï¿½ï¿½ï¿½UDP SOCKET ï¿½É¹ï¿½" << std::endl;
+        // ï¿½ó¶¨±ï¿½ï¿½ï¿½IPï¿½Í¶Ë¿Ú£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë£©
         sockaddr_in localAddr{};
         localAddr.sin_family = AF_INET;
-        localAddr.sin_port = htons(4096); // ±¾µØ¶Ë¿Ú£¬¿É¸ù¾ÝÐèÇóÐÞ¸Ä
+        localAddr.sin_port = htons(4096); // ï¿½ï¿½ï¿½Ø¶Ë¿Ú£ï¿½ï¿½É¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Þ¸ï¿½
         if (inet_pton(AF_INET, _srcIp.c_str(), &(localAddr.sin_addr)) <= 0) {
-            closesocket(_sockfd);
+            netcompat::net_close(_sockfd);
             throw std::runtime_error("Invalid local IP address");
         }
         if (bind(_sockfd, reinterpret_cast<sockaddr*>(&localAddr), sizeof(localAddr)) == SOCKET_ERROR) {
-            closesocket(_sockfd);
+            netcompat::net_close(_sockfd);
             throw std::system_error(errno, std::system_category(), "Bind failed");
         }
 
-        std::cout << "UDP SOCKET ´´½¨²¢°ó¶¨³É¹¦" << std::endl;
+        std::cout << "UDP SOCKET ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ó¶¨³É¹ï¿½" << std::endl;
         initialized_ = true;
     }
     UDPController::~UDPController() {
@@ -63,32 +63,32 @@ namespace Radar {
         const std::string& length = "0000",
         const std::string& body = "",
         int timeout_sec = 1) {
-        // ÉèÖÃsocket³¬Ê±
+        // ï¿½ï¿½ï¿½ï¿½socketï¿½ï¿½Ê±
         struct timeval tv;
-        tv.tv_sec = timeout_sec;   // Ãë¼¶³¬Ê±
-        tv.tv_usec = 0;            // Î¢Ãë²¿·ÖÉèÎª0
+        tv.tv_sec = timeout_sec;   // ï¿½ë¼¶ï¿½ï¿½Ê±
+        tv.tv_usec = 0;            // Î¢ï¿½ë²¿ï¿½ï¿½ï¿½ï¿½Îª0
         setsockopt(_sockfd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
 
-        // ´´½¨ÏûÏ¢
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢
         std::string message = CONFIG_HEADER + cmd_to_string(cmd) + length + body + CONFIG_FOOTER;
         std::vector<uint8_t> msg_bytes;
 
-        // ½«Ê®Áù½øÖÆ×Ö·û´®×ª»»Îª×Ö½Ú
+        // ï¿½ï¿½Ê®ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·ï¿½ï¿½ï¿½×ªï¿½ï¿½Îªï¿½Ö½ï¿½
         for (size_t i = 0; i < message.length(); i += 2) {
             std::string byte_str = message.substr(i, 2);
             uint8_t byte_val = static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
             msg_bytes.push_back(byte_val);
-            std::cout << "Sending byte: 0x" << std::hex << static_cast<int>(byte_val) << std::dec << std::endl;// ´òÓ¡·¢ËÍµÄ×Ö½Ú
+            std::cout << "Sending byte: 0x" << std::hex << static_cast<int>(byte_val) << std::dec << std::endl;// ï¿½ï¿½Ó¡ï¿½ï¿½ï¿½Íµï¿½ï¿½Ö½ï¿½
         }
 
-        // ·¢ËÍÏûÏ¢
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢
         bool sent = _sendTo(msg_bytes, _destIp, _destPort);
         if (!sent) {
             throw std::runtime_error("Failed to send command");
         }
-        // µÈ´ý»Ø´«
+        // ï¿½È´ï¿½ï¿½Ø´ï¿½
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        //½ÓÊÕ»Ø´«
+        //ï¿½ï¿½ï¿½Õ»Ø´ï¿½
         std::vector<uint8_t> buffer(MAX_SIZE);
         sockaddr_in senderAddr{};
         socklen_t addrLen = sizeof(senderAddr);
@@ -115,12 +115,12 @@ namespace Radar {
         destAddr.sin_family = AF_INET;
         destAddr.sin_port = htons(_destPort);
 
-        // Ê¹ÓÃ inet_pton Ìæ´úÆúÓÃµÄ inet_addr
+        // Ê¹ï¿½ï¿½ inet_pton ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ãµï¿½ inet_addr
         if (inet_pton(AF_INET, destIp.c_str(), &(destAddr.sin_addr)) <= 0) {
-            return false; // ÎÞÐ§µÄÄ¿±êIP»ò×ª»»Ê§°Ü
+            return false; // ï¿½ï¿½Ð§ï¿½ï¿½Ä¿ï¿½ï¿½IPï¿½ï¿½×ªï¿½ï¿½Ê§ï¿½ï¿½
         }
         if (destAddr.sin_addr.s_addr == INADDR_NONE) {
-            return false; // ÎÞÐ§µÄÄ¿±êIP
+            return false; // ï¿½ï¿½Ð§ï¿½ï¿½Ä¿ï¿½ï¿½IP
         }
         int result = sendto(_sockfd,
             reinterpret_cast<const char*>(data.data()),

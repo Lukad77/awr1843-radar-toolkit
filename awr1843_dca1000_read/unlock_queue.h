@@ -10,9 +10,9 @@
 #include <stdint.h>
 #include <atomic>
 #include <algorithm>
-#include <cstring>  // Ìí¼Ó memcpy ÐèÒªµÄÍ·ÎÄ¼þ
-#include <thread>   // Ìí¼Ó std::this_thread ÐèÒªµÄÍ·ÎÄ¼þ
-#include <chrono>   // Ìí¼Ó std::chrono ÐèÒªµÄÍ·ÎÄ¼þ
+#include <cstring>  // ï¿½ï¿½ï¿½ï¿½ memcpy ï¿½ï¿½Òªï¿½ï¿½Í·ï¿½Ä¼ï¿½
+#include <thread>   // ï¿½ï¿½ï¿½ï¿½ std::this_thread ï¿½ï¿½Òªï¿½ï¿½Í·ï¿½Ä¼ï¿½
+#include <chrono>   // ï¿½ï¿½ï¿½ï¿½ std::chrono ï¿½ï¿½Òªï¿½ï¿½Í·ï¿½Ä¼ï¿½
 
 static inline bool is_power_of_2(uint32_t num) {
     return (num != 0 && (num & (num - 1)) == 0);
@@ -40,18 +40,18 @@ public:
     }
 
     ~UnlockQueue() {
-        if (_buffer)  // ÐÞ¸´Ìõ¼þÅÐ¶Ï
+        if (_buffer)  // ï¿½Þ¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¶ï¿½
             delete[] _buffer;
     }
 
     uint32_t Put(const T* buffer, uint32_t len) {
-        // ÐÞ¸´ÄÚ´æÐòÊ¹ÓÃ
+        // ï¿½Þ¸ï¿½ï¿½Ú´ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½
         uint32_t out_val = _out.load(std::memory_order_acquire);
         if (len > _size - (_in.load(std::memory_order_relaxed) - out_val))//allow override
             _out.fetch_add(len, std::memory_order_release);
 
         uint32_t in_val = _in.load(std::memory_order_relaxed);
-        uint32_t l = min(len, _size - (in_val & (_size - 1)));
+        uint32_t l = std::min(len, _size - (in_val & (_size - 1)));
         std::memcpy(_buffer + (in_val & (_size - 1)), buffer, l * sizeof(T));
         std::memcpy(_buffer, buffer + l, (len - l) * sizeof(T));
 
@@ -60,33 +60,33 @@ public:
     }
 
     /**
- * ´Ó»·ÐÎ»º³åÇøÖÐ»ñÈ¡Êý¾Ý
+ * ï¿½Ó»ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð»ï¿½È¡ï¿½ï¿½ï¿½ï¿½
  *
- * @param buffer ÓÃÓÚ´æ´¢»ñÈ¡Êý¾ÝµÄ»º³åÇøÖ¸Õë
- * @param len    ÇëÇó»ñÈ¡µÄÊý¾ÝÔªËØ¸öÊý
- * @return       Êµ¼Ê»ñÈ¡µÄÊý¾ÝÔªËØ¸öÊý
+ * @param buffer ï¿½ï¿½ï¿½Ú´æ´¢ï¿½ï¿½È¡ï¿½ï¿½ï¿½ÝµÄ»ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½
+ * @param len    ï¿½ï¿½ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ôªï¿½Ø¸ï¿½ï¿½ï¿½
+ * @return       Êµï¿½Ê»ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ôªï¿½Ø¸ï¿½ï¿½ï¿½
  *
- * ¸Ãº¯ÊýÊÇÒ»¸öÏß³Ì°²È«µÄ»·ÐÎ»º³åÇø¶ÁÈ¡²Ù×÷£¬Ê¹ÓÃÔ­×Ó²Ù×÷ºÍÄÚ´æÆÁÕÏ
- * À´È·±£¶àÏß³Ì»·¾³ÏÂµÄÊý¾ÝÒ»ÖÂÐÔ¡£
+ * ï¿½Ãºï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ß³Ì°ï¿½È«ï¿½Ä»ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½Ô­ï¿½Ó²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½
+ * ï¿½ï¿½È·ï¿½ï¿½ï¿½ï¿½ï¿½ß³Ì»ï¿½ï¿½ï¿½ï¿½Âµï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½Ô¡ï¿½
  */
     uint32_t Get(T* buffer, uint32_t len) {
-        // »ñÈ¡µ±Ç°Ð´ÈëÎ»ÖÃºÍ¶ÁÈ¡Î»ÖÃ
+        // ï¿½ï¿½È¡ï¿½ï¿½Ç°Ð´ï¿½ï¿½Î»ï¿½ÃºÍ¶ï¿½È¡Î»ï¿½ï¿½
         uint32_t in_val = _in.load(std::memory_order_acquire);
         uint32_t out_val = _out.load(std::memory_order_relaxed);
 
-        // ¼ÆËã¿É¶ÁÈ¡µÄÊý¾ÝÁ¿£¬²»³¬¹ýÇëÇó³¤¶È
-        len = min(len, in_val - out_val);
+        // ï¿½ï¿½ï¿½ï¿½É¶ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ó³¤¶ï¿½
+        len = std::min(len, in_val - out_val);
 
-        // ¼ÆËãµÚÒ»¶Î¿ÉÁ¬Ðø¶ÁÈ¡µÄÊý¾ÝÁ¿£¨¿¼ÂÇ»·ÐÎ»º³åÇøµÄ±ß½çÇé¿ö£©
-        uint32_t l = min(len, _size - (out_val & (_size - 1)));
+        // ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½Î¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç»ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä±ß½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        uint32_t l = std::min(len, _size - (out_val & (_size - 1)));
 
-        // ´Ó»·ÐÎ»º³åÇø¸´ÖÆµÚÒ»¶ÎÊý¾Ýµ½Ä¿±ê»º³åÇø
+        // ï¿½Ó»ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æµï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½Ýµï¿½Ä¿ï¿½ê»ºï¿½ï¿½ï¿½ï¿½
         std::memcpy(buffer, _buffer + (out_val & (_size - 1)), l * sizeof(T));
 
-        // Èç¹ûÐèÒª£¬¸´ÖÆµÚ¶þ¶ÎÊý¾Ý£¨»·ÐÎ»º³åÇø»ØÈÆ²¿·Ö£©
+        // ï¿½ï¿½ï¿½ï¿½ï¿½Òªï¿½ï¿½ï¿½ï¿½ï¿½ÆµÚ¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý£ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ²ï¿½ï¿½Ö£ï¿½
         std::memcpy(buffer + l, _buffer, (len - l) * sizeof(T));
 
-        // ¸üÐÂ¶ÁÈ¡Î»ÖÃÖ¸Õë
+        // ï¿½ï¿½ï¿½Â¶ï¿½È¡Î»ï¿½ï¿½Ö¸ï¿½ï¿½
         _out.fetch_add(len, std::memory_order_release);
         return len;
     }

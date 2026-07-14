@@ -135,7 +135,8 @@ int main() {
     radar1843->close();
 
     // 暂停程序以便查看输出结果
-    system("pause");
+    std::cout << "按 Enter 键退出..." << std::endl;
+    std::cin.get();
 
     return 0;
 }
@@ -203,7 +204,8 @@ int main() {
             << allRxData[0][0].size() << " samples\n";
     }
 
-    system("pause");
+    std::cout << "按 Enter 键退出..." << std::endl;
+    std::cin.get();
     
     return 0;
 }

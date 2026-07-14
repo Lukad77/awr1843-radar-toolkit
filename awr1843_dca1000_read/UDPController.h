@@ -1,18 +1,5 @@
 #pragma once
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#pragma comment(lib, "ws2_32.lib")
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#define SOCKET int
-#define INVALID_SOCKET (-1)
-#define SOCKET_ERROR (-1)
-#define closesocket close
-#endif
+#include "net_compat.h"   // è·¨å¹³å° socket å…¼å®¹å±‚ï¼ˆç»Ÿä¸€ SOCKET/INVALID_SOCKET/closesocket ç­‰ï¼‰
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -24,35 +11,35 @@ namespace Radar{
     constexpr const char* CONFIG_STATUS = "0000";
     constexpr const char* CONFIG_FOOTER = "aaee";
 
-    // ÊıÖµ³£Á¿
+    // ï¿½ï¿½Öµï¿½ï¿½ï¿½ï¿½
     constexpr uint16_t HEADER_Num = 0xa55a;
     constexpr uint16_t FOOTER_Num = 0xeeaa;
     /**
-     * @brief ÃüÁî´úÂëÃ¶¾ÙÀà£¬Ê¹ÓÃÇ¿ÀàĞÍÃ¶¾ÙÈ·±£ÀàĞÍ°²È«
+     * @brief ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã¶ï¿½ï¿½ï¿½à£¬Ê¹ï¿½ï¿½Ç¿ï¿½ï¿½ï¿½ï¿½Ã¶ï¿½ï¿½È·ï¿½ï¿½ï¿½ï¿½ï¿½Í°ï¿½È«
      */
 enum class CommandCode : uint16_t {
-        RESET_FPGA_CMD_CODE = 0x0100,           // ¸´Î»FPGAÃüÁî
-        RESET_AR_DEV_CMD_CODE = 0x0200,         // ¸´Î»ARÉè±¸ÃüÁî
-        CONFIG_FPGA_GEN_CMD_CODE = 0x0300,      // ÅäÖÃFPGAÉú³ÉÃüÁî
-        CONFIG_EEPROM_CMD_CODE = 0x0400,        // ÅäÖÃEEPROMÃüÁî
-        RECORD_START_CMD_CODE = 0x0500,          // ¿ªÊ¼¼ÇÂ¼ÃüÁî
-        RECORD_STOP_CMD_CODE = 0x0600,           // Í£Ö¹¼ÇÂ¼ÃüÁî
-        PLAYBACK_START_CMD_CODE = 0x0700,        // ¿ªÊ¼»Ø·ÅÃüÁî
-        PLAYBACK_STOP_CMD_CODE = 0x0800,         // Í£Ö¹»Ø·ÅÃüÁî
-        SYSTEM_CONNECT_CMD_CODE = 0x0900,        // ÏµÍ³Á¬½ÓÃüÁî
-        SYSTEM_ERROR_CMD_CODE = 0x0A00,         // ÏµÍ³´íÎóÃüÁî
-        CONFIG_PACKET_DATA_CMD_CODE = 0x0B00,   // ÅäÖÃÊı¾İ°üÃüÁî
-        CONFIG_DATA_MODE_AR_DEV_CMD_CODE = 0x0C00, // ÅäÖÃÊı¾İÄ£Ê½ARÉè±¸ÃüÁî
-        INIT_FPGA_PLAYBACK_CMD_CODE = 0x0D00,   // ³õÊ¼»¯FPGA»Ø·ÅÃüÁî
-        READ_FPGA_VERSION_CMD_CODE = 0x0E00      // ¶ÁÈ¡FPGA°æ±¾ÃüÁî
+        RESET_FPGA_CMD_CODE = 0x0100,           // ï¿½ï¿½Î»FPGAï¿½ï¿½ï¿½ï¿½
+        RESET_AR_DEV_CMD_CODE = 0x0200,         // ï¿½ï¿½Î»ARï¿½è±¸ï¿½ï¿½ï¿½ï¿½
+        CONFIG_FPGA_GEN_CMD_CODE = 0x0300,      // ï¿½ï¿½ï¿½ï¿½FPGAï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        CONFIG_EEPROM_CMD_CODE = 0x0400,        // ï¿½ï¿½ï¿½ï¿½EEPROMï¿½ï¿½ï¿½ï¿½
+        RECORD_START_CMD_CODE = 0x0500,          // ï¿½ï¿½Ê¼ï¿½ï¿½Â¼ï¿½ï¿½ï¿½ï¿½
+        RECORD_STOP_CMD_CODE = 0x0600,           // Í£Ö¹ï¿½ï¿½Â¼ï¿½ï¿½ï¿½ï¿½
+        PLAYBACK_START_CMD_CODE = 0x0700,        // ï¿½ï¿½Ê¼ï¿½Ø·ï¿½ï¿½ï¿½ï¿½ï¿½
+        PLAYBACK_STOP_CMD_CODE = 0x0800,         // Í£Ö¹ï¿½Ø·ï¿½ï¿½ï¿½ï¿½ï¿½
+        SYSTEM_CONNECT_CMD_CODE = 0x0900,        // ÏµÍ³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        SYSTEM_ERROR_CMD_CODE = 0x0A00,         // ÏµÍ³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        CONFIG_PACKET_DATA_CMD_CODE = 0x0B00,   // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½İ°ï¿½ï¿½ï¿½ï¿½ï¿½
+        CONFIG_DATA_MODE_AR_DEV_CMD_CODE = 0x0C00, // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½ARï¿½è±¸ï¿½ï¿½ï¿½ï¿½
+        INIT_FPGA_PLAYBACK_CMD_CODE = 0x0D00,   // ï¿½ï¿½Ê¼ï¿½ï¿½FPGAï¿½Ø·ï¿½ï¿½ï¿½ï¿½ï¿½
+        READ_FPGA_VERSION_CMD_CODE = 0x0E00      // ï¿½ï¿½È¡FPGAï¿½æ±¾ï¿½ï¿½ï¿½ï¿½
     };
 
-const int MAX_SIZE = 4096;//´ÓUDP»ñÈ¡µÄ×î´óÊı¾İ°ü´óĞ¡
-// ¹¤¾ßº¯Êı£º°ÑÃ¶¾ÙÖ¸Áî×ª»»Îª×Ö·û´®
+const int MAX_SIZE = 4096;//ï¿½ï¿½UDPï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½İ°ï¿½ï¿½ï¿½Ğ¡
+// ï¿½ï¿½ï¿½ßºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã¶ï¿½ï¿½Ö¸ï¿½ï¿½×ªï¿½ï¿½Îªï¿½Ö·ï¿½ï¿½ï¿½
 
 
 /*
-    @brief: ÔÚ4096¶Ë¿ÚÉÏÃæ¸øDCA1000·¢ËÍÃüÁî½øĞĞÅäÖÃ
+    @brief: ï¿½ï¿½4096ï¿½Ë¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½DCA1000ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 */
 
 class UDPController
@@ -60,12 +47,12 @@ class UDPController
 public:
 	UDPController();
 	~UDPController();
-    std::vector<uint8_t> _sendCMD(CommandCode cmd, const std::string& length, const std::string& body, int timeout_sec);//·¢ËÍÃüÁîµÄ·½·¨£¬µ÷ÓÃsendTo½øĞĞÃüÁî·¢ËÍ
+    std::vector<uint8_t> _sendCMD(CommandCode cmd, const std::string& length, const std::string& body, int timeout_sec);//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½sendToï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½î·¢ï¿½ï¿½
 private:
 
     
-    bool _sendTo(const std::vector<uint8_t>& data, const std::string& destIp, uint16_t destPort);//µ×²ãUDP·¢ËÍÊı¾İµÄ·½·¨
-    //std::vector<uint8_t> _recvFromUDP(size_t maxSize);//´ÓUDP¶Ë¿Ú»ñÈ¡»Ø·¢µÄÊı¾İ
+    bool _sendTo(const std::vector<uint8_t>& data, const std::string& destIp, uint16_t destPort);//ï¿½×²ï¿½UDPï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½İµÄ·ï¿½ï¿½ï¿½
+    //std::vector<uint8_t> _recvFromUDP(size_t maxSize);//ï¿½ï¿½UDPï¿½Ë¿Ú»ï¿½È¡ï¿½Ø·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     void _close();
 
     std::string cmd_to_string(CommandCode cmd) {
@@ -90,17 +77,17 @@ private:
         if (it != cmd_map.end()) {
             return it->second;
         }
-        return "0000"; // Ä¬ÈÏ·µ»ØÎ´ÖªÃüÁî
+        return "0000"; // Ä¬ï¿½Ï·ï¿½ï¿½ï¿½Î´Öªï¿½ï¿½ï¿½ï¿½
     }
 
 private:
     SOCKET _sockfd = INVALID_SOCKET;
     
     bool initialized_ = false;
-    const std::string _destIp = "192.168.33.180";//dca1000µÄip
-    const std::string _srcIp = "192.168.33.30";//ÉÏÎ»»úip
-    //uint16_t localPort_ = 1024;//±¾µØ¶Ë¿Ú
-    uint16_t _destPort = 4096;//dca1000µÄ¶Ë¿Ú
+    const std::string _destIp = "192.168.33.180";//dca1000ï¿½ï¿½ip
+    const std::string _srcIp = "192.168.33.30";//ï¿½ï¿½Î»ï¿½ï¿½ip
+    //uint16_t localPort_ = 1024;//ï¿½ï¿½ï¿½Ø¶Ë¿ï¿½
+    uint16_t _destPort = 4096;//dca1000ï¿½Ä¶Ë¿ï¿½
 #ifdef _WIN32
     static bool wsaInitialized_;
     static void initializeWSA();

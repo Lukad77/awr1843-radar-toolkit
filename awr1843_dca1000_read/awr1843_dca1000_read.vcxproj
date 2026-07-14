@@ -140,6 +140,7 @@
     <ClInclude Include="AWR1843Controller.h" />
     <ClInclude Include="DataParser.h" />
     <ClInclude Include="Logger.h" />
+    <ClInclude Include="net_compat.h" />
     <ClInclude Include="RealTimeProcessor.h" />
     <ClInclude Include="SerialPort.h" />
     <ClInclude Include="UDPController.h" />

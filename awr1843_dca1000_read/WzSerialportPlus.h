@@ -15,8 +15,15 @@
 #include <thread>
 #include <functional>
 
+#ifdef _WIN32
 #include <WinSock2.h>
 #include <windows.h>
+// Windows 下串口句柄为 HANDLE
+using SerialHandle = HANDLE;
+#else
+// POSIX(Mac/Linux) 下串口是普通文件描述符 int
+using SerialHandle = int;
+#endif
 
 using ReceiveCallback = std::function<void (char*,int)>;
 
@@ -59,7 +66,7 @@ protected:
     virtual void onReceive(char* data,int length);
 
 private:
-	HANDLE serialportHandle;
+	SerialHandle serialportHandle;
     std::string name;
     int baudrate;
     int stopbit;

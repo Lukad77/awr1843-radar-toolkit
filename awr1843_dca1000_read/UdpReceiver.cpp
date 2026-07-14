@@ -10,18 +10,17 @@ UDPReceiver::UDPReceiver()
     , is_receiving_(false)
     , stop_requested_(false)
     , current_mode_(ReceiveMode::BLOCKING)
-    , buffer_size_(1024 * 1024) // Ä¬ÈÏ1MB
+    , buffer_size_(1024 * 1024) // Ä¬ï¿½ï¿½1MB
     , timeout_ms_(5000)
     , max_packet_num_(1000)
     , initialized_(false)
     , winsock_initialized_(false)
 {
-    // ³õÊ¼»¯Í³¼ÆÐÅÏ¢
+    // ï¿½ï¿½Ê¼ï¿½ï¿½Í³ï¿½ï¿½ï¿½ï¿½Ï¢
     stats_ = { 0, 0, 0, 0, 0, 0 };
 
-    // ³õÊ¼»¯Winsock
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) == 0) {
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½(Windows:WSAStartup; POSIX:ï¿½Õ²ï¿½ï¿½ï¿½)
+    if (netcompat::net_startup()) {
         winsock_initialized_ = true;
     }
 }
@@ -30,12 +29,12 @@ UDPReceiver::~UDPReceiver() {
     StopReceiving();
 
     if (socket_ != INVALID_SOCKET) {
-        closesocket(socket_);
+        netcompat::net_close(socket_);
         socket_ = INVALID_SOCKET;
     }
 
     if (winsock_initialized_) {
-        WSACleanup();
+        netcompat::net_cleanup();
     }
 }
 
@@ -46,20 +45,20 @@ bool UDPReceiver::Initialize(const std::string& localIP, uint16_t localPort,
         return true;
     }
 
-    // ´´½¨socket
+    // ï¿½ï¿½ï¿½ï¿½socket
     socket_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (socket_ == INVALID_SOCKET) {
-        std::cerr << "[UDPReceiver] Failed to create socket: " << WSAGetLastError() << std::endl;
+        std::cerr << "[UDPReceiver] Failed to create socket: " << netcompat::net_last_error() << std::endl;
         return false;
     }
 
-    // ÉèÖÃsocketÑ¡Ïî
+    // ï¿½ï¿½ï¿½ï¿½socketÑ¡ï¿½ï¿½
     int bufSize = buffer_size_;
     if (setsockopt(socket_, SOL_SOCKET, SO_RCVBUF, (char*)&bufSize, sizeof(bufSize)) == SOCKET_ERROR) {
-        std::cerr << "[UDPReceiver] Failed to set receive buffer size: " << WSAGetLastError() << std::endl;
+        std::cerr << "[UDPReceiver] Failed to set receive buffer size: " << netcompat::net_last_error() << std::endl;
     }
 
-    // °ó¶¨µØÖ·
+    // ï¿½ó¶¨µï¿½Ö·
     memset(&local_addr_, 0, sizeof(local_addr_));
     local_addr_.sin_family = AF_INET;
     local_addr_.sin_port = htons(localPort);
@@ -73,13 +72,13 @@ bool UDPReceiver::Initialize(const std::string& localIP, uint16_t localPort,
     }
 
     if (bind(socket_, (sockaddr*)&local_addr_, sizeof(local_addr_)) == SOCKET_ERROR) {
-        std::cerr << "[UDPReceiver] Bind failed: " << WSAGetLastError() << std::endl;
-        closesocket(socket_);
+        std::cerr << "[UDPReceiver] Bind failed: " << netcompat::net_last_error() << std::endl;
+        netcompat::net_close(socket_);
         socket_ = INVALID_SOCKET;
         return false;
     }
 
-    // ¸ù¾ÝÄ£Ê½³õÊ¼»¯¶ÓÁÐ
+    // ï¿½ï¿½ï¿½ï¿½Ä£Ê½ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     if (mode == ReceiveMode::QUEUE_BASED) {
         packet_queue_ = std::make_unique<UnlockQueue<packet_t>>(queueSize);
     }
@@ -106,7 +105,7 @@ bool UDPReceiver::StartReceiving() {
     stop_requested_ = false;
     is_receiving_ = true;
 
-    // Æô¶¯½ÓÊÕÏß³Ì£¨¶ÔÓÚÒì²½Ä£Ê½£©
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ß³Ì£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ì²½Ä£Ê½ï¿½ï¿½
     if (current_mode_ == ReceiveMode::QUEUE_BASED) {
         receive_thread_ = std::thread(&UDPReceiver::ReceiveThreadFunc, this);
         std::cout << "[UDPReceiver] Started receiving in queue-based mode" << std::endl;
@@ -124,7 +123,7 @@ void UDPReceiver::StopReceiving() {
     stop_requested_ = true;
     is_receiving_ = false;
 
-    // Í¨ÖªµÈ´ýµÄÏß³Ì
+    // Í¨Öªï¿½È´ï¿½ï¿½ï¿½ï¿½ß³ï¿½
     data_ready_cv_.notify_all();
 
     if (receive_thread_.joinable()) {
@@ -159,10 +158,10 @@ bool UDPReceiver::GetFramesFromQueue(uint32_t frameNum, int bytesInFrame,
     
     uint32_t maxPacketNum = ((frameNum + 1) * bytesInFrame) / (PACKET_SIZE_DEFAULT - 10) + 1;
     size_t requiredBufferSize = maxPacketNum * PACKET_SIZE_DEFAULT;
-    // µÈ´ýÌõ¼þ£º»º³åÇøÊý¾Ý×ã¹» »ò ½ÓÊÕÍ£Ö¹
+    // ï¿½È´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã¹» ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Í£Ö¹
     auto timeout = std::chrono::seconds(timeout_s);
   
-    // ×¼±¸»º³åÇø
+    // ×¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     std::vector<uint8_t> tempBuffer(requiredBufferSize);
     packet_t* buf_ptr = reinterpret_cast<packet_t*>(tempBuffer.data());
 
@@ -171,7 +170,7 @@ bool UDPReceiver::GetFramesFromQueue(uint32_t frameNum, int bytesInFrame,
     uint64_t bytesCnt;
     int lastFrameTransferedBytes;
 
-    // µÈ´ýÏÂÒ»Ö¡¿ªÊ¼
+    // ï¿½È´ï¿½ï¿½ï¿½Ò»Ö¡ï¿½ï¿½Ê¼
     auto startTime = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> lock(buffer_mutex_);
     do {
@@ -192,7 +191,7 @@ bool UDPReceiver::GetFramesFromQueue(uint32_t frameNum, int bytesInFrame,
         lastFrameTransferedBytes = bytesCnt % bytesInFrame;
         lastFrameRemainBytes = (bytesInFrame - lastFrameTransferedBytes) % bytesInFrame;
 
-        // ¼ì²é³¬Ê±
+        // ï¿½ï¿½é³¬Ê±
         auto currentTime = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - startTime).count();
         if (elapsed > timeout_s * 1000) {
@@ -204,13 +203,13 @@ bool UDPReceiver::GetFramesFromQueue(uint32_t frameNum, int bytesInFrame,
     uint32_t expectedPacketNum = ceil((lastFrameRemainBytes + frameNum * bytesInFrame) /
         static_cast<double>(PACKET_SIZE_DEFAULT - 10));
 
-    // »ñÈ¡Ê£ÓàÖ¡Êý¾Ý
+    // ï¿½ï¿½È¡Ê£ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½
     ret = packet_queue_->Get_wait(buf_ptr + 1, expectedPacketNum - 1, timeout_s * 1000);
     if (ret < expectedPacketNum - 1) {
         std::cout << "[UDPReceiver] Incomplete frame data" << std::endl;
     }
 
-    // ´¦ÀíÅÅÐò
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     if (sort) {
         SortPackets(tempBuffer, frameNum, bytesInFrame, PACKET_SIZE_DEFAULT,
             lastFrameRemainBytes, result);
@@ -219,7 +218,7 @@ bool UDPReceiver::GetFramesFromQueue(uint32_t frameNum, int bytesInFrame,
         result = std::move(tempBuffer);
     }
 
-    // ¸üÐÂÍ³¼ÆÐÅÏ¢
+    // ï¿½ï¿½ï¿½ï¿½Í³ï¿½ï¿½ï¿½ï¿½Ï¢
     {
         std::lock_guard<std::mutex> lock(stats_mutex_);
         stats_.receivedPacketNum += ret + 1; // +1 for the first packet
@@ -236,10 +235,9 @@ void UDPReceiver::ReceiveThreadFunc() {
     socklen_t src_len = sizeof(src);
     memset(&src, 0, sizeof(src));
 
-    // ÉèÖÃ·Ç×èÈûÄ£Ê½
-    unsigned long mode = 1;
-    if (ioctlsocket(socket_, FIONBIO, &mode) != 0) {
-        std::cerr << "[UDPReceiver] Failed to set non-blocking mode: " << WSAGetLastError() << std::endl;
+    // ï¿½ï¿½ï¿½Ã·ï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½(ï¿½ï¿½Æ½Ì¨:Windowsï¿½ï¿½ioctlsocket,POSIXï¿½ï¿½fcntl)
+    if (!netcompat::net_set_nonblocking(socket_, true)) {
+        std::cerr << "[UDPReceiver] Failed to set non-blocking mode: " << netcompat::net_last_error() << std::endl;
         return;
     }
 
@@ -252,22 +250,22 @@ void UDPReceiver::ReceiveThreadFunc() {
         if (n > 0) {
             ProcessPacket(buffer);
 
-            // ¸üÐÂÍ³¼Æ
+            // ï¿½ï¿½ï¿½ï¿½Í³ï¿½ï¿½
             {
                 std::lock_guard<std::mutex> lock(stats_mutex_);
                 stats_.receivedPacketNum++;
             }
 
-            // Í¨ÖªµÈ´ýµÄÏß³Ì
+            // Í¨Öªï¿½È´ï¿½ï¿½ï¿½ï¿½ß³ï¿½
             //data_ready_cv_.notify_one();
         }
         else if (n == 0) {
-            // Á¬½Ó¹Ø±Õ
+            // ï¿½ï¿½ï¿½Ó¹Ø±ï¿½
             break;
         }
         else {
-            int error = WSAGetLastError();
-            if (error != WSAEWOULDBLOCK) {
+            int error = netcompat::net_last_error();
+            if (!netcompat::net_would_block(error)) {
                 std::cerr << "[UDPReceiver] Receive error: " << error << std::endl;
                 {
                     std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -275,7 +273,7 @@ void UDPReceiver::ReceiveThreadFunc() {
                 }
             }
 
-            // ¶ÌÔÝÐÝÃß±ÜÃâCPUÕ¼ÓÃ¹ý¸ß
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ß±ï¿½ï¿½ï¿½CPUÕ¼ï¿½Ã¹ï¿½ï¿½ï¿½
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         data_ready_cv_.notify_all();
@@ -304,9 +302,16 @@ bool UDPReceiver::ReadDataBlocking(uint32_t frameNum, int bytesInFrame, int pack
     std::vector<uint8_t> tempBuffer(requiredBufferSize);
     int lastFrameRemainBytes = 0;
 
-    // ÉèÖÃ³¬Ê±
+    // ï¿½ï¿½ï¿½Ã³ï¿½Ê±(SO_RCVTIMEO ï¿½ï¿½Æ½Ì¨ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£ï¿½Windows=intï¿½ï¿½ï¿½ï¿½,POSIX=struct timeval)
+#ifdef _WIN32
     int TimeOut = timeout_s * 1000;
     setsockopt(socket_, SOL_SOCKET, SO_RCVTIMEO, (char*)&TimeOut, sizeof(TimeOut));
+#else
+    struct timeval TimeOut;
+    TimeOut.tv_sec = timeout_s;
+    TimeOut.tv_usec = 0;
+    setsockopt(socket_, SOL_SOCKET, SO_RCVTIMEO, (char*)&TimeOut, sizeof(TimeOut));
+#endif
 
     struct sockaddr_in src;
     socklen_t src_len = sizeof(src);
@@ -318,7 +323,7 @@ bool UDPReceiver::ReadDataBlocking(uint32_t frameNum, int bytesInFrame, int pack
 
     std::unique_lock<std::mutex> lock(buffer_mutex_, std::defer_lock);
 
-    // µÈ´ýÏÂÒ»Ö¡¿ªÊ¼
+    // ï¿½È´ï¿½ï¿½ï¿½Ò»Ö¡ï¿½ï¿½Ê¼
     do {
         receivePacketLen = recvfrom(socket_, (char*)tempBuffer.data(), packetSize,
             0, (sockaddr*)&src, &src_len);
@@ -336,7 +341,7 @@ bool UDPReceiver::ReadDataBlocking(uint32_t frameNum, int bytesInFrame, int pack
     uint32_t expectedPacketNum = ceil((lastFrameRemainBytes + frameNum * bytesInFrame) /
         static_cast<double>(packetSize - 10));
 
-    // ¶ÁÈ¡Ê£ÓàÖ¡Êý¾Ý
+    // ï¿½ï¿½È¡Ê£ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½
     for (uint32_t i = 1; i < expectedPacketNum; i++) {
         size_t idx = i * packetSize;
         receivePacketLen = recvfrom(socket_, (char*)&tempBuffer[idx], packetSize,
@@ -347,7 +352,7 @@ bool UDPReceiver::ReadDataBlocking(uint32_t frameNum, int bytesInFrame, int pack
         }
     }
 
-    // ´¦ÀíÅÅÐò
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     if (sort) {
         SortPackets(tempBuffer, frameNum, bytesInFrame, packetSize,
             lastFrameRemainBytes, result);
@@ -356,7 +361,7 @@ bool UDPReceiver::ReadDataBlocking(uint32_t frameNum, int bytesInFrame, int pack
         result = std::move(tempBuffer);
     }
 
-    // ¸üÐÂÍ³¼Æ
+    // ï¿½ï¿½ï¿½ï¿½Í³ï¿½ï¿½
     {
         std::lock_guard<std::mutex> lock(stats_mutex_);
         stats_.receivedPacketNum += expectedPacketNum;
@@ -379,13 +384,13 @@ void UDPReceiver::SortPackets(const std::vector<uint8_t>& input, uint32_t frameN
     output.resize(frameNum * bytesInFrame);
     uint32_t seqNum = 0, idx = 0;
 
-    // ´¦ÀíµÚÒ»¸öÊý¾Ý°ü
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½Ý°ï¿½
     uint32_t firstPacketNum = *reinterpret_cast<const uint32_t*>(input.data());
     int cpySize = payloadSize - lastFrameRemainBytes;
 
     memcpy(output.data(), input.data() + lastFrameRemainBytes, cpySize);
 
-    // ´¦ÀíÆäÓàÊý¾Ý°ü
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý°ï¿½
     for (uint32_t i = 1; i < packetNum; i++) {
         seqNum = *reinterpret_cast<const uint32_t*>(input.data() + i * packetSize);
         idx = seqNum - firstPacketNum;

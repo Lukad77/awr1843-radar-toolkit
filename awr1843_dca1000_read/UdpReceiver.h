@@ -1,8 +1,6 @@
 #ifndef UDP_RECEIVER_H
 #define UDP_RECEIVER_H
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include "net_compat.h"   // è·¨å¹³å° socket å…¼å®¹å±‚ï¼ˆå†…éƒ¨æŒ‰å¹³å°å¼•å…¥ winsock æˆ– BSD socketï¼‰
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -11,21 +9,19 @@
 #include <condition_variable>
 #include "unlock_queue.h"
 
-#pragma comment(lib, "ws2_32.lib")
-
-// Ä¬ÈÏÊı¾İ°ü´óĞ¡
+// Ä¬ï¿½ï¿½ï¿½ï¿½ï¿½İ°ï¿½ï¿½ï¿½Ğ¡
 #define PACKET_SIZE_DEFAULT 1466
 
-// UDPÊı¾İ°ü½á¹¹Ìå
+// UDPï¿½ï¿½ï¿½İ°ï¿½ï¿½á¹¹ï¿½ï¿½
 #pragma pack(push, 1)
 typedef struct {
-    uint32_t seqNum;          // ĞòÁĞºÅ
-    uint8_t byteCnt[6];       // ×Ö½Ú¼ÆÊı
-    uint8_t payload[PACKET_SIZE_DEFAULT - 10];  // ¸ºÔØÊı¾İ
+    uint32_t seqNum;          // ï¿½ï¿½ï¿½Ğºï¿½
+    uint8_t byteCnt[6];       // ï¿½Ö½Ú¼ï¿½ï¿½ï¿½
+    uint8_t payload[PACKET_SIZE_DEFAULT - 10];  // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 } packet_t;
 #pragma pack(pop)
 
-// ½ÓÊÕÍ³¼ÆĞÅÏ¢½á¹¹Ìå
+// ï¿½ï¿½ï¿½ï¿½Í³ï¿½ï¿½ï¿½ï¿½Ï¢ï¿½á¹¹ï¿½ï¿½
 struct ReceiveStats {
     uint32_t receivedPacketNum;
     uint32_t firstPacketNum;
@@ -37,47 +33,47 @@ struct ReceiveStats {
 
 class UDPReceiver {
 public:
-    // ½ÓÊÕÄ£Ê½Ã¶¾Ù
+    // ï¿½ï¿½ï¿½ï¿½Ä£Ê½Ã¶ï¿½ï¿½
     enum class ReceiveMode {
-        BLOCKING,      // ×èÈûÄ£Ê½
-        ASYNC_THREAD,  // Òì²½Ïß³ÌÄ£Ê½
-        QUEUE_BASED    // »ùÓÚ¶ÓÁĞµÄÒì²½Ä£Ê½
+        BLOCKING,      // ï¿½ï¿½ï¿½ï¿½Ä£Ê½
+        ASYNC_THREAD,  // ï¿½ì²½ï¿½ß³ï¿½Ä£Ê½
+        QUEUE_BASED    // ï¿½ï¿½ï¿½Ú¶ï¿½ï¿½Ğµï¿½ï¿½ì²½Ä£Ê½
     };
 
-    // ¹¹ÔìºÍÎö¹¹
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     UDPReceiver();
     ~UDPReceiver();
 
-    // ³õÊ¼»¯UDP½ÓÊÕÆ÷
+    // ï¿½ï¿½Ê¼ï¿½ï¿½UDPï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     bool Initialize(const std::string& localIP, uint16_t localPort,
         ReceiveMode mode = ReceiveMode::BLOCKING,
         size_t queueSize = 1000);
 
-    // ¿ªÊ¼½ÓÊÕÊı¾İ
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     bool StartReceiving();
 
-    // Í£Ö¹½ÓÊÕÊı¾İ
+    // Í£Ö¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     void StopReceiving();
 
-    // ¶ÁÈ¡Ö¡Êı¾İ£¨×èÈû·½Ê½£©
+    // ï¿½ï¿½È¡Ö¡ï¿½ï¿½ï¿½İ£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê½ï¿½ï¿½
     bool ReadFrames(uint32_t frameNum, int bytesInFrame, int packetSize,
         int timeout_s, bool sort, std::vector<uint8_t>& result);
 
-    // ´Ó¶ÓÁĞ»ñÈ¡Ö¡Êı¾İ£¨Òì²½·½Ê½£©
+    // ï¿½Ó¶ï¿½ï¿½Ğ»ï¿½È¡Ö¡ï¿½ï¿½ï¿½İ£ï¿½ï¿½ì²½ï¿½ï¿½Ê½ï¿½ï¿½
     bool GetFramesFromQueue(uint32_t frameNum, int bytesInFrame,
         int timeout_s, bool sort, std::vector<uint8_t>& result);
 
-    // ×´Ì¬²éÑ¯
+    // ×´Ì¬ï¿½ï¿½Ñ¯
     bool IsReceiving() const { return is_receiving_; }
     ReceiveMode GetCurrentMode() const { return current_mode_; }
     ReceiveStats GetStatistics() const;
 
-    // ÅäÖÃÑ¡Ïî
+    // ï¿½ï¿½ï¿½ï¿½Ñ¡ï¿½ï¿½
     void SetBufferSize(size_t bufferSize) { buffer_size_ = bufferSize; }
     void SetTimeout(int timeoutMs) { timeout_ms_ = timeoutMs; }
 
 private:
-    // ÄÚ²¿ÊµÏÖ·½·¨
+    // ï¿½Ú²ï¿½Êµï¿½Ö·ï¿½ï¿½ï¿½
     void ReceiveThreadFunc();
     void ProcessPacket(const packet_t& packet);
     bool ReadDataBlocking(uint32_t frameNum, int bytesInFrame, int packetSize,
@@ -86,33 +82,33 @@ private:
         int bytesInFrame, int packetSize, int lastFrameRemainBytes,
         std::vector<uint8_t>& output);
 
-    // ÍøÂçÏà¹Ø³ÉÔ±
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ø³ï¿½Ô±
     SOCKET socket_;
     sockaddr_in local_addr_;
     sockaddr_in remote_addr_;
 
-    // Ïß³Ì¿ØÖÆ
+    // ï¿½ß³Ì¿ï¿½ï¿½ï¿½
     std::atomic<bool> is_receiving_;
     std::atomic<bool> stop_requested_;
     std::thread receive_thread_;
 
-    // Êı¾İ»º³åÇø
+    // ï¿½ï¿½ï¿½İ»ï¿½ï¿½ï¿½ï¿½ï¿½
     std::unique_ptr<UnlockQueue<packet_t>> packet_queue_;
     std::vector<uint8_t> frame_buffer_;
     mutable std::mutex buffer_mutex_;
     std::condition_variable data_ready_cv_;
 
-    // ÅäÖÃ²ÎÊı
+    // ï¿½ï¿½ï¿½Ã²ï¿½ï¿½ï¿½
     ReceiveMode current_mode_;
     size_t buffer_size_;
     int timeout_ms_;
     uint32_t max_packet_num_;
 
-    // Í³¼ÆĞÅÏ¢
+    // Í³ï¿½ï¿½ï¿½ï¿½Ï¢
     mutable std::mutex stats_mutex_;
     ReceiveStats stats_;
 
-    // ×´Ì¬±êÖ¾
+    // ×´Ì¬ï¿½ï¿½Ö¾
     bool initialized_;
     bool winsock_initialized_;
 };
