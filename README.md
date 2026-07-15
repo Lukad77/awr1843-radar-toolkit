@@ -28,6 +28,76 @@
 - **接口驱动可扩展**：`IFrameSource/IStage/IResultSink/IInferenceEngine` 接口支持依赖倒置，新增处理阶段仅需实现 `IStage`
 - **自动化测试**：3个测试套件、10169条断言、100%通过，全部无硬件依赖可在CI运行
 
+## 系统架构
+
+### 整体系统架构图
+
+下图展示硬件设备与上位机之间的三条独立链路：串口控制链、UDP 命令控制链（4096）与 UDP 数据链路（4098）。
+
+```mermaid
+graph TB
+    subgraph HW["硬件层"]
+        RADAR["AWR1843<br/>毫米波雷达"]
+        DCA["DCA1000<br/>数据采集卡"]
+    end
+    subgraph HOST["上位机（Windows / Linux / macOS）"]
+        subgraph CTRL["设备控制"]
+            SERIAL["串口通信<br/>WzSerialportPlus<br/>AWR1843Controller"]
+            UDPCTRL["UDP命令通道<br/>UDPController :4096"]
+        end
+        subgraph DATA["数据链路"]
+            UDPRECV["UDP数据接收<br/>UdpReceiver :4098<br/>seqNum帧重组"]
+            PIPE["实时处理流水线<br/>Pipeline + ParseStage"]
+        end
+        STORE["数据存储<br/>bin / CSV"]
+        LOG["日志系统<br/>Logger"]
+    end
+
+    SERIAL -->|"CLI配置命令 921600bps"| RADAR
+    UDPCTRL -->|"采集/回放配置命令"| DCA
+    RADAR -->|"LVDS原始数据"| DCA
+    DCA -->|"UDP以太网流"| UDPRECV
+    UDPRECV --> PIPE
+    PIPE --> STORE
+    PIPE -.记录.-> LOG
+    CTRL -.记录.-> LOG
+```
+
+### 分层架构图
+
+新架构 `src/` 树采用 core / transport / pipeline 三层划分，依赖单向向下，上层仅依赖下层接口：
+
+```mermaid
+graph TB
+    subgraph PIPELINE["pipeline/ 管道层"]
+        PL["Pipeline<br/>保序无损执行器"]
+        PS["ParseStage<br/>I/Q解交织"]
+    end
+    subgraph TRANSPORT["transport/ 传输层"]
+        FS["FrameSpool<br/>两级无损缓冲"]
+    end
+    subgraph CORE["core/ 核心层"]
+        RC["RadarConfig<br/>单一事实源"]
+        SR["SpscRing&lt;T&gt;<br/>有界阻塞队列"]
+        BP["BufferPool&lt;T&gt;<br/>内存池"]
+        FB["FrameBuffer<br/>连续内存"]
+        FC["FrameContext<br/>工作单元"]
+        IF["Interfaces<br/>接口定义"]
+        SN["SeqNum<br/>回绕安全序号"]
+    end
+
+    PL --> SR
+    PL --> IF
+    PS --> RC
+    PS --> BP
+    PS --> FB
+    PS --> IF
+    FS -.存储.-> FC
+    IF --> FC
+    FC --> FB
+    BP --> FB
+```
+
 ## 新架构组件说明
 
 ### 核心层（src/core/）
@@ -55,14 +125,41 @@
 | **Pipeline** | `src/pipeline/Pipeline.{h,cpp}` | 顺序保持、无丢失的管道执行器；单工作线程按FIFO顺序弹出帧，依次运行各 `IStage`，扇出到各 `IResultSink`；`submit()` 满则阻塞（背压），`stop()` 优雅排空 |
 | **ParseStage** | `src/pipeline/ParseStage.{h,cpp}` | 替代DataParser的管道阶段；将原始DCA1000 int16 I/Q字节解交织为连续FrameBuffer；保持与旧DataParser相同的字节布局，输出匹配旧的bin→CSV黄金标准；无内部mutex，可选BufferPool复用 |
 
-### 架构数据流
+### 实时处理流水线架构图
 
+下图展示从 UDP 数据包到磁盘落盘的完整数据流，以及 `RadarConfig`、`SpscRing`、`BufferPool`、`FrameSpool`、`Pipeline`、`ParseStage` 等核心组件的交互关系：
+
+```mermaid
+flowchart LR
+    NET["DCA1000<br/>UDP:4098"]
+    RECV["UdpReceiver<br/>帧重组(seqNum)"]
+    SPOOL["FrameSpool<br/>RAM环 + 磁盘溢写<br/>两级无损FIFO"]
+    RING["SpscRing<br/>有界阻塞队列<br/>满则回压"]
+    WORKER["Pipeline worker<br/>单线程FIFO保序"]
+    PARSE["ParseStage<br/>I/Q解交织"]
+    FB["FrameBuffer<br/>连续内存<br/>[chirp][rx][sample]"]
+    SINK["IResultSink 扇出<br/>文件/CSV/WebSocket/指标"]
+    POOL["BufferPool<br/>内存池复用"]
+    CFG["RadarConfig<br/>单一事实源<br/>derive/validate"]
+
+    NET --> RECV
+    RECV -->|"push()非阻塞无损"| SPOOL
+    SPOOL -->|"pop()阻塞FIFO"| RING
+    RING -->|"submit()背压"| WORKER
+    WORKER --> PARSE
+    PARSE --> FB
+    FB --> SINK
+    POOL -.复用帧缓冲.-> FB
+    CFG -.bytesPerFrame等参数.-> RECV
+    CFG -.解析维度.-> PARSE
+    PARSE -.尺寸不匹配→valid=false.-> SINK
 ```
-DCA1000 UDP:4098 → UDPReceiver(帧重组) → FrameSpool(RAM+磁盘兜底)
-    → Pipeline.submit() → SpscRing(有界阻塞回压)
-    → Pipeline worker(FIFO保序) → ParseStage(I/Q解交织→FrameBuffer)
-    → IResultSink(文件/CSV/WebSocket/指标 扇出)
-```
+
+**关键数据流说明**：
+- `FrameSpool` 作为 record-then-process 兜底，RAM 满则溢写磁盘，生产者（socket 排空线程）永不阻塞也永不丢包
+- `SpscRing` 在数据路径上满则阻塞，逐级回压，移除一切 drop-oldest 语义
+- `Pipeline` 单 worker FIFO 消费，保证输出顺序 == 提交顺序，无需 Resequencer
+- `RadarConfig` 作为单一事实源，供帧重组与解析共用一致参数
 
 ## 环境要求
 
@@ -236,6 +333,50 @@ CMake 定义了五个独立的可执行目标：
 ## 后续扩展开发指南
 
 新架构通过接口驱动设计（`IFrameSource`/`IStage`/`IResultSink`/`IInferenceEngine`）支持低耦合扩展。新增处理能力只需实现相应接口并注册到 `Pipeline`，无需修改执行器或核心组件。
+
+### 扩展开发架构图
+
+下图展示四个可插拔扩展点：`IFrameSource`（数据源）、`IStage`（处理阶段）、`IInferenceEngine`（推理后端）与 `IResultSink`（结果输出）。标 ✓ 为已实现，其余为后续扩展示例：
+
+```mermaid
+graph TB
+    subgraph SOURCES["数据源 IFrameSource"]
+        S1["Dca1000UdpSource"]
+        S2["FileReplaySource"]
+        S3["SimulatorSource"]
+    end
+    PIPE["Pipeline 执行引擎<br/>保序·无损·背压"]
+    subgraph STAGES["处理阶段 IStage"]
+        ST1["ParseStage ✓"]
+        ST2["RangeFFTStage"]
+        ST3["CFARStage"]
+        ST4["InferenceStage"]
+    end
+    subgraph ENGINE["推理后端 IInferenceEngine"]
+        E1["OnnxInferenceEngine"]
+        E2["TensorRTEngine"]
+    end
+    subgraph SINKS["结果输出 IResultSink"]
+        K1["FileSink"]
+        K2["CsvSink"]
+        K3["WebSocketSink"]
+        K4["MetricsSink"]
+    end
+
+    S1 -->|"submit(FrameContext)"| PIPE
+    S2 --> PIPE
+    S3 --> PIPE
+    PIPE --> ST1
+    ST1 --> ST2
+    ST2 --> ST3
+    ST3 --> ST4
+    ST4 -.调用.-> E1
+    ST4 -.调用.-> E2
+    ST4 -->|"扇出"| K1
+    ST4 --> K2
+    ST4 --> K3
+    ST4 --> K4
+```
 
 ### 新增处理阶段（IStage）
 
