@@ -233,6 +233,116 @@ CMake 定义了五个独立的可执行目标：
 13. **Windows下链接错误**：确认 CMakeLists.txt 中包含 `ws2_32` 链接（已在 CMake 中自动处理）
 14. **测试目标构建失败**：检查 `src/` 目录下相应组件是否正确编译，确认 C++17 标准已启用
 
+## 后续扩展开发指南
+
+新架构通过接口驱动设计（`IFrameSource`/`IStage`/`IResultSink`/`IInferenceEngine`）支持低耦合扩展。新增处理能力只需实现相应接口并注册到 `Pipeline`，无需修改执行器或核心组件。
+
+### 新增处理阶段（IStage）
+
+实现 `IStage` 接口，在 `Pipeline` 中按顺序注册即可串联到处理链路：
+
+```cpp
+#include "core/Interfaces.h"
+
+class RangeFFTStage : public radar::IStage {
+public:
+    const char* name() const override { return "RangeFFT"; }
+
+    bool process(radar::FrameContext& ctx) override {
+        // ctx.parsed 已由 ParseStage 填充为 FrameBuffer [chirp][rx][sample]
+        // 在此执行距离FFT，结果可写回 ctx.parsed 或附加到自定义字段
+        // 返回 true 保留帧，返回 false 标记丢弃（仅限 best-effort 分支）
+        auto& fb = *ctx.parsed;
+        // ... FFT 处理逻辑 ...
+        return true;
+    }
+};
+
+// 注册到 Pipeline
+pipeline.addStage(std::make_shared<ParseStage>(cfg));
+pipeline.addStage(std::make_shared<RangeFFTStage>());  // 新增阶段
+```
+
+**关键约定**：
+- `process()` 在 Pipeline 单工作线程中调用，天然保序，无需内部加锁
+- `ctx.parsed` 为 `shared_ptr<FrameBuffer>`，可直接读写连续内存
+- 返回 `false` 表示显式丢弃（仅限显示旁路等 best-effort 分支，数据路径必须返回 `true`）
+
+### 新增结果输出（IResultSink）
+
+实现 `IResultSink` 接口，注册后 Pipeline 会将处理完的帧扇出到所有 Sink：
+
+```cpp
+class CsvSink : public radar::IResultSink {
+public:
+    void consume(const radar::FrameContext& ctx) override {
+        // 将 ctx.parsed 写入 CSV 文件
+    }
+    void flush() override {
+        // 刷新文件缓冲
+    }
+};
+
+pipeline.addSink(std::make_shared<CsvSink>());
+```
+
+**典型 Sink 场景**：文件落盘、CSV 导出、WebSocket 实时推送、指标统计（延迟/丢帧/队列水位）。
+
+### 新增数据源（IFrameSource）
+
+实现 `IFrameSource` 接口，使实时 UDP 接收、文件回放、仿真器等不同来源统一接入 Pipeline：
+
+```cpp
+class FileReplaySource : public radar::IFrameSource {
+public:
+    bool open() override { /* 打开 .bin 文件 */ }
+    void close() override { /* 关闭文件 */ }
+    bool next(radar::FrameContext& out) override {
+        // 读取下一帧原始字节，填充 out.raw 和 out.frameSeq
+        // 返回 false 表示数据耗尽
+    }
+};
+
+// 使用：source.next(ctx) -> pipeline.submit(ctx)
+```
+
+### 新增推理后端（IInferenceEngine）
+
+实现 `IInferenceEngine` 接口，抽象 NN 后端（ONNX Runtime / TensorRT 等），供 `InferenceStage` 调用：
+
+```cpp
+class OnnxInferenceEngine : public radar::IInferenceEngine {
+public:
+    bool load(const std::string& modelPath) override { /* 加载模型 */ }
+    bool infer(const float* input, std::size_t inN,
+               float* output, std::size_t outN) override { /* 执行推理 */ }
+};
+```
+
+### 扩展开发检查清单
+
+| 检查项 | 说明 |
+|--------|------|
+| 配置来源 | 所有维度参数从 `RadarConfig` 获取，不硬编码；调用 `derive()` 确保派生值正确 |
+| 内存管理 | 使用 `BufferPool` 复用 `FrameBuffer`，避免每帧 malloc；`shared_ptr` 管理生命周期 |
+| 线程安全 | Pipeline 单工作线程保证保序，`IStage::process()` 内无需加锁；Sink 的 `consume()` 可能被快速调用，注意写入竞态 |
+| 数据完整性 | 帧尺寸不匹配时设置 `ctx.valid=false` 并计数告警，绝不静默转发残帧 |
+| 背压传播 | `Pipeline::submit()` 满则阻塞回压；如需非阻塞，检查 `backlog()` 后决策 |
+| 日志记录 | 关键节点使用 `Logger` 记录；高频路径避免重格式化 |
+| 测试验证 | 新增组件编写单元测试，加入 CMake 测试目标，确保 `ctest` 全通过 |
+
+### 后续阶段路线图
+
+| 阶段 | 目标 | 关键组件 |
+|------|------|------|
+| Phase 2 后续 | 接入真实 UDP 源与文件回放 | `Dca1000UdpSource`、`FileReplaySource` |
+| Phase 0/1 收尾 | 配置外置、遗留源 UTF-8 转换、拆分 `AWR1843Controller` | `AppConfig`(JSON)、`Logger` 启用 |
+| Phase 3 后续 | WebSocket 实时显示旁路 | `WebSocketSink` + 前端 |
+| Phase 4/5 | DSP 处理与推理 | `RangeFFT`/`DopplerFFT`/`CFAR`（FFTW/pffft）、`InferenceStage`（ONNX Runtime） |
+| Phase 6 | 可观测性与优化 | `MetricsSink`（延迟/丢帧/队列水位/Spool 深度）、线程绑核、overload 告警 |
+
+> 更详细的扩展开发指南（含传统链路接入点、数据契约、锁约定）请参阅 [数据处理流程扩展开发指南](.qoder/repowiki/zh/content/数据处理流程扩展开发指南.md) 和 [架构演进文档](docs/ARCHITECTURE_EVOLUTION.md)。
+
 ## 许可证
 
 本项目采用MIT许可证，详情参见LICENSE文件。
