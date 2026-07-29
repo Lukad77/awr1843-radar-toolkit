@@ -13,20 +13,22 @@ namespace radar {
 
 class PhaseCsvSink : public IResultSink {
 public:
-    explicit PhaseCsvSink(const std::string& path) : out_(path) {
-        if (out_) out_ << "frameSeq,unwrappedPhaseRad,displacementMm\n";
-    }
+  explicit PhaseCsvSink(const std::string &path) : out_(path) {
+    if (out_)
+      out_ << "frameSeq,unwrappedPhaseRad,displacementMm\n";
+  }
 
-    void consume(const FrameContext& ctx) override {
-        if (!out_ || !ctx.valid || std::isnan(ctx.unwrappedPhaseRad)) return;
-        out_ << ctx.frameSeq << ',' << ctx.unwrappedPhaseRad << ','
-             << ctx.displacementMm << '\n';
-    }
+  void consume(const FrameContext &ctx) override {
+    if (!out_ || !ctx.valid || std::isnan(ctx.unwrappedPhaseRad))
+      return;
+    out_ << ctx.frameSeq << ',' << ctx.unwrappedPhaseRad << ','
+         << ctx.displacementMm << '\n';
+  }
 
-    void flush() override { out_.flush(); }
+  void flush() override { out_.flush(); }
 
 private:
-    std::ofstream out_;
+  std::ofstream out_;
 };
 
-}  // namespace radar
+} // namespace radar

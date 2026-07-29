@@ -19,24 +19,24 @@ namespace radar {
 
 class FftPlan {
 public:
-    // n must be a power of two (>= 1); throws std::invalid_argument otherwise.
-    explicit FftPlan(std::size_t n);
+  // n must be a power of two (>= 1); throws std::invalid_argument otherwise.
+  explicit FftPlan(std::size_t n);
 
-    std::size_t size() const noexcept { return n_; }
+  std::size_t size() const noexcept { return n_; }
 
-    // In-place, unnormalized forward DFT: X[k] = sum x[n] e^{-2*pi*i*k*n/N}.
-    void forward(std::complex<float>* x) const;
+  // In-place, unnormalized forward DFT: X[k] = sum x[n] e^{-2*pi*i*k*n/N}.
+  void forward(std::complex<float> *x) const;
 
 private:
-    std::size_t n_;
-    std::vector<std::size_t> rev_;            // bit-reversal permutation
-    std::vector<std::complex<float>> tw_;     // W_n^k, k in [0, n/2)
+  std::size_t n_;
+  std::vector<std::size_t> rev_;        // bit-reversal permutation
+  std::vector<std::complex<float>> tw_; // W_n^k, k in [0, n/2)
 };
 
 // Swap halves so zero frequency lands in the center (n must be even).
-void fftshift(std::complex<float>* x, std::size_t n);
+void fftshift(std::complex<float> *x, std::size_t n);
 
 // Symmetric Hann window of length n (n>=1; returns {1} for n==1).
 std::vector<float> makeHannWindow(std::size_t n);
 
-}  // namespace radar
+} // namespace radar

@@ -25,38 +25,38 @@
 namespace radar {
 
 struct PhaseUnwrapParams {
-    int targetRangeBin = -1;     // -1 => auto-select strongest bin in range gate
-    float minRangeM = 0.3f;      // auto-select gate (used when rangeIdxToMeters > 0)
-    float maxRangeM = 2.5f;
-    int relockPeriodFrames = 0;  // 0 => lock once and keep the bin
-    int rxIdx = 0;               // antenna used for the phase track
+  int targetRangeBin = -1; // -1 => auto-select strongest bin in range gate
+  float minRangeM = 0.3f;  // auto-select gate (used when rangeIdxToMeters > 0)
+  float maxRangeM = 2.5f;
+  int relockPeriodFrames = 0; // 0 => lock once and keep the bin
+  int rxIdx = 0;              // antenna used for the phase track
 };
 
 class PhaseUnwrapStage : public IStage {
 public:
-    PhaseUnwrapStage(const RadarConfig& cfg, PhaseUnwrapParams params = {});
+  PhaseUnwrapStage(const RadarConfig &cfg, PhaseUnwrapParams params = {});
 
-    const char* name() const override { return "PhaseUnwrap"; }
+  const char *name() const override { return "PhaseUnwrap"; }
 
-    // Reads ctx.rangeCube, fills ctx.unwrappedPhaseRad / ctx.displacementMm.
-    bool process(FrameContext& ctx) override;
+  // Reads ctx.rangeCube, fills ctx.unwrappedPhaseRad / ctx.displacementMm.
+  bool process(FrameContext &ctx) override;
 
-    // Currently tracked range bin (-1 before the first lock).
-    int targetBin() const noexcept { return bin_; }
+  // Currently tracked range bin (-1 before the first lock).
+  int targetBin() const noexcept { return bin_; }
 
 private:
-    int selectBin(const FrameBuffer& cube) const;
+  int selectBin(const FrameBuffer &cube) const;
 
-    RadarConfig cfg_;
-    PhaseUnwrapParams p_;
+  RadarConfig cfg_;
+  PhaseUnwrapParams p_;
 
-    int bin_ = -1;
-    std::uint64_t framesSeen_ = 0;
-    bool hasPrev_ = false;
-    double prevRaw_ = 0.0;       // last wrapped phase (rad)
-    double unwrapped_ = 0.0;     // running unwrapped phase (rad)
-    double baseMean_ = 0.0;      // first frame's mean (displacement zero point)
-    bool hasBase_ = false;
+  int bin_ = -1;
+  std::uint64_t framesSeen_ = 0;
+  bool hasPrev_ = false;
+  double prevRaw_ = 0.0;   // last wrapped phase (rad)
+  double unwrapped_ = 0.0; // running unwrapped phase (rad)
+  double baseMean_ = 0.0;  // first frame's mean (displacement zero point)
+  bool hasBase_ = false;
 };
 
-}  // namespace radar
+} // namespace radar

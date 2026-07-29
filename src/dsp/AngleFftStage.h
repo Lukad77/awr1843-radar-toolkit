@@ -23,18 +23,18 @@ namespace radar {
 
 class AngleFftStage : public IStage {
 public:
-    explicit AngleFftStage(const RadarConfig& cfg);
+  explicit AngleFftStage(const RadarConfig &cfg);
 
-    const char* name() const override { return "AngleFFT"; }
+  const char *name() const override { return "AngleFFT"; }
 
-    // Reads ctx.dopplerCube + ctx.detections, fills Detection::angleDeg.
-    bool process(FrameContext& ctx) override;
+  // Reads ctx.dopplerCube + ctx.detections, fills Detection::angleDeg.
+  bool process(FrameContext &ctx) override;
 
 private:
-    RadarConfig cfg_;
-    FftPlan plan_;                              // numAngleBins
-    std::vector<std::complex<float>> scratch_;  // zero-padded snapshot
-    bool supported_;                            // 1 Tx only (see header note)
+  RadarConfig cfg_;
+  FftPlan plan_;                             // numAngleBins
+  std::vector<std::complex<float>> scratch_; // zero-padded snapshot
+  bool supported_;                           // 1 Tx only (see header note)
 };
 
-}  // namespace radar
+} // namespace radar

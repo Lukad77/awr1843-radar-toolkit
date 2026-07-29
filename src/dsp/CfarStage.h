@@ -20,17 +20,17 @@ namespace radar {
 
 class CfarStage : public IStage {
 public:
-    explicit CfarStage(const RadarConfig& cfg, CfarParams params = {});
+  explicit CfarStage(const RadarConfig &cfg, CfarParams params = {});
 
-    const char* name() const override { return "CA-CFAR"; }
+  const char *name() const override { return "CA-CFAR"; }
 
-    // Reads ctx.rdMap, fills ctx.detections (possibly empty, never null when
-    // rdMap is present and dimensions match).
-    bool process(FrameContext& ctx) override;
+  // Reads ctx.rdMap, fills ctx.detections (possibly empty, never null when
+  // rdMap is present and dimensions match).
+  bool process(FrameContext &ctx) override;
 
 private:
-    RadarConfig cfg_;
-    CfarParams p_;
+  RadarConfig cfg_;
+  CfarParams p_;
 };
 
-}  // namespace radar
+} // namespace radar

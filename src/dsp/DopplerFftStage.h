@@ -22,20 +22,21 @@ namespace radar {
 
 class DopplerFftStage : public IStage {
 public:
-    explicit DopplerFftStage(const RadarConfig& cfg,
-                             std::shared_ptr<BufferPool<FrameBuffer>> pool = nullptr);
+  explicit DopplerFftStage(
+      const RadarConfig &cfg,
+      std::shared_ptr<BufferPool<FrameBuffer>> pool = nullptr);
 
-    const char* name() const override { return "DopplerFFT"; }
+  const char *name() const override { return "DopplerFFT"; }
 
-    // Reads ctx.rangeCube, fills ctx.dopplerCube + ctx.rdMap.
-    bool process(FrameContext& ctx) override;
+  // Reads ctx.rangeCube, fills ctx.dopplerCube + ctx.rdMap.
+  bool process(FrameContext &ctx) override;
 
 private:
-    RadarConfig cfg_;
-    FftPlan plan_;                                  // numChirpsPerFrame
-    std::vector<float> win_;                        // Hann over chirps
-    std::vector<std::complex<float>> scratch_;      // one chirp column
-    std::shared_ptr<BufferPool<FrameBuffer>> pool_;
+  RadarConfig cfg_;
+  FftPlan plan_;                             // numChirpsPerFrame
+  std::vector<float> win_;                   // Hann over chirps
+  std::vector<std::complex<float>> scratch_; // one chirp column
+  std::shared_ptr<BufferPool<FrameBuffer>> pool_;
 };
 
-}  // namespace radar
+} // namespace radar

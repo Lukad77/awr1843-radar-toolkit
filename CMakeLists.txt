@@ -109,6 +109,7 @@ set(DSP_SRCS
     ${NEWSRC_DIR}/dsp/CfarStage.cpp
     ${NEWSRC_DIR}/dsp/AngleFftStage.cpp
     ${NEWSRC_DIR}/dsp/PhaseUnwrapStage.cpp
+    ${NEWSRC_DIR}/dsp/ClutterRemovalStage.cpp
 )
 
 # ==========================================================================

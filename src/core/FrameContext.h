@@ -21,39 +21,40 @@ namespace radar {
 struct Detection;
 
 struct FrameContext {
-    // Application-level monotonic frame counter. uint64 => no practical overflow.
-    std::uint64_t frameSeq = 0;
+  // Application-level monotonic frame counter. uint64 => no practical overflow.
+  std::uint64_t frameSeq = 0;
 
-    // First DCA1000 packet seqNum that composed this frame (wrap-aware, uint32).
-    std::uint32_t wireSeqStart = 0;
+  // First DCA1000 packet seqNum that composed this frame (wrap-aware, uint32).
+  std::uint32_t wireSeqStart = 0;
 
-    // false when a seq gap/reorder left this frame incomplete: it must be
-    // flagged + counted, never silently forwarded as a partial frame.
-    bool valid = true;
+  // false when a seq gap/reorder left this frame incomplete: it must be
+  // flagged + counted, never silently forwarded as a partial frame.
+  bool valid = true;
 
-    // Raw bytes as received/reassembled (may be null after parsing).
-    std::shared_ptr<std::vector<std::uint8_t>> raw;
+  // Raw bytes as received/reassembled (may be null after parsing).
+  std::shared_ptr<std::vector<std::uint8_t>> raw;
 
-    // Parsed complex tensor [chirp][rx][sample] (may be null before parsing).
-    std::shared_ptr<FrameBuffer> parsed;
+  // Parsed complex tensor [chirp][rx][sample] (may be null before parsing).
+  std::shared_ptr<FrameBuffer> parsed;
 
-    // ---- DSP products (filled progressively by dsp/ stages; null until produced) ----
-    // Range FFT output [chirp][rx][rangeBin].
-    std::shared_ptr<FrameBuffer> rangeCube;
-    // Doppler FFT output [doppler][rx][rangeBin], fftshifted (zero Doppler centered).
-    std::shared_ptr<FrameBuffer> dopplerCube;
-    // Range-Doppler map: linear power (|.|^2 summed over rx), row-major
-    // [doppler * numRangeBins + rangeBin]. Convert to dB only for display.
-    std::shared_ptr<std::vector<float>> rdMap;
-    // CA-CFAR detections (angle filled later by AngleFftStage).
-    std::shared_ptr<std::vector<Detection>> detections;
-    // Slow-time unwrapped phase at the tracked range bin (vital signs); NaN
-    // until PhaseUnwrapStage runs.
-    float unwrappedPhaseRad = std::numeric_limits<float>::quiet_NaN();
-    float displacementMm = std::numeric_limits<float>::quiet_NaN();
+  // ---- DSP products (filled progressively by dsp/ stages; null until
+  // produced) ---- Range FFT output [chirp][rx][rangeBin].
+  std::shared_ptr<FrameBuffer> rangeCube;
+  // Doppler FFT output [doppler][rx][rangeBin], fftshifted (zero Doppler
+  // centered).
+  std::shared_ptr<FrameBuffer> dopplerCube;
+  // Range-Doppler map: linear power (|.|^2 summed over rx), row-major
+  // [doppler * numRangeBins + rangeBin]. Convert to dB only for display.
+  std::shared_ptr<std::vector<float>> rdMap;
+  // CA-CFAR detections (angle filled later by AngleFftStage).
+  std::shared_ptr<std::vector<Detection>> detections;
+  // Slow-time unwrapped phase at the tracked range bin (vital signs); NaN
+  // until PhaseUnwrapStage runs.
+  float unwrappedPhaseRad = std::numeric_limits<float>::quiet_NaN();
+  float displacementMm = std::numeric_limits<float>::quiet_NaN();
 
-    // Timestamps for end-to-end latency measurement.
-    std::chrono::steady_clock::time_point tCaptured{};
+  // Timestamps for end-to-end latency measurement.
+  std::chrono::steady_clock::time_point tCaptured{};
 };
 
 } // namespace radar

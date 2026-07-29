@@ -21,22 +21,23 @@ namespace radar {
 
 class RangeFftStage : public IStage {
 public:
-    explicit RangeFftStage(const RadarConfig& cfg,
-                           std::shared_ptr<BufferPool<FrameBuffer>> pool = nullptr,
-                           bool removeDc = true);
+  explicit RangeFftStage(
+      const RadarConfig &cfg,
+      std::shared_ptr<BufferPool<FrameBuffer>> pool = nullptr,
+      bool removeDc = true);
 
-    const char* name() const override { return "RangeFFT"; }
+  const char *name() const override { return "RangeFFT"; }
 
-    // Reads ctx.parsed, fills ctx.rangeCube. Invalid/absent input passes
-    // through untouched (flagged upstream, never a silent drop).
-    bool process(FrameContext& ctx) override;
+  // Reads ctx.parsed, fills ctx.rangeCube. Invalid/absent input passes
+  // through untouched (flagged upstream, never a silent drop).
+  bool process(FrameContext &ctx) override;
 
 private:
-    RadarConfig cfg_;
-    FftPlan plan_;              // numRangeBins
-    std::vector<float> win_;    // Hann over numAdcSamples
-    std::shared_ptr<BufferPool<FrameBuffer>> pool_;
-    bool removeDc_;
+  RadarConfig cfg_;
+  FftPlan plan_;           // numRangeBins
+  std::vector<float> win_; // Hann over numAdcSamples
+  std::shared_ptr<BufferPool<FrameBuffer>> pool_;
+  bool removeDc_;
 };
 
-}  // namespace radar
+} // namespace radar
