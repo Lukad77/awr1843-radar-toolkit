@@ -99,6 +99,50 @@ target_compile_features(radar_spool_tests PRIVATE cxx_std_17)
 target_link_libraries(radar_spool_tests PRIVATE Threads::Threads)
 add_test(NAME radar_spool_tests COMMAND radar_spool_tests)
 
+# ==========================================================================
+# Phase 4 DSP 算子源文件（自研 radix-2 FFT，零外部依赖，三平台）
+# ==========================================================================
+set(DSP_SRCS
+    ${NEWSRC_DIR}/dsp/Fft.cpp
+    ${NEWSRC_DIR}/dsp/RangeFftStage.cpp
+    ${NEWSRC_DIR}/dsp/DopplerFftStage.cpp
+    ${NEWSRC_DIR}/dsp/CfarStage.cpp
+    ${NEWSRC_DIR}/dsp/AngleFftStage.cpp
+    ${NEWSRC_DIR}/dsp/PhaseUnwrapStage.cpp
+)
+
+# ==========================================================================
+# target 6: radar_dsp_tests —— Phase 4 DSP 算子单测（无硬件，全合成信号）
+#   验证：FFT 对拍朴素 DFT、Range/Doppler 峰值定位、CA-CFAR 检测/虚警、
+#   Angle FFT 导向矢量恢复、慢时间相位解缠绕、全链路过 Pipeline 回压保序。
+# ==========================================================================
+add_executable(radar_dsp_tests
+    ${NEWSRC_DIR}/tests/test_dsp.cpp
+    ${NEWSRC_DIR}/core/RadarConfig.cpp
+    ${NEWSRC_DIR}/pipeline/ParseStage.cpp
+    ${NEWSRC_DIR}/pipeline/Pipeline.cpp
+    ${DSP_SRCS}
+)
+target_include_directories(radar_dsp_tests PRIVATE ${NEWSRC_DIR})
+target_compile_features(radar_dsp_tests PRIVATE cxx_std_17)
+target_link_libraries(radar_dsp_tests PRIVATE Threads::Threads)
+add_test(NAME radar_dsp_tests COMMAND radar_dsp_tests)
+
+# ==========================================================================
+# target 7: radar_dsp_demo —— 真实数据集端到端 DSP 链 demo（无硬件回归入口）
+#   Parse → RangeFFT → DopplerFFT → CA-CFAR → AngleFFT → PhaseUnwrap，
+#   输出逐 stage 耗时、检测摘要与呼吸相位 CSV。
+# ==========================================================================
+add_executable(radar_dsp_demo
+    ${NEWSRC_DIR}/tools/radar_dsp_demo.cpp
+    ${NEWSRC_DIR}/core/RadarConfig.cpp
+    ${NEWSRC_DIR}/pipeline/ParseStage.cpp
+    ${DSP_SRCS}
+)
+target_include_directories(radar_dsp_demo PRIVATE ${NEWSRC_DIR})
+target_compile_features(radar_dsp_demo PRIVATE cxx_std_17)
+target_link_libraries(radar_dsp_demo PRIVATE Threads::Threads)
+
 # ---- 构建提示 ----
 message(STATUS "==============================================================")
 message(STATUS " ${PROJECT_NAME} configured for ${CMAKE_SYSTEM_NAME}")
@@ -107,4 +151,6 @@ message(STATUS "   radar_full      : 完整程序（含串口链，三平台）"
 message(STATUS "   radar_core_tests: 新架构基础组件单测（三平台）")
 message(STATUS "   radar_pipeline_tests: 流水线骨架单测（三平台）")
 message(STATUS "   radar_spool_tests   : 两级无损 FrameSpool 单测（三平台）")
+message(STATUS "   radar_dsp_tests     : Phase4 DSP 算子单测（三平台）")
+message(STATUS "   radar_dsp_demo      : 数据集端到端 DSP 链 demo（三平台）")
 message(STATUS "==============================================================")

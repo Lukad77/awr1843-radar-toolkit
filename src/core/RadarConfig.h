@@ -19,6 +19,7 @@ struct RadarConfig {
     int  numTxAnt = 1;
     int  numAdcSamples = 256;
     int  rxIdx = 0;           // selected Rx for single-Rx parse (0-based)
+    int  numAngleBins = 64;   // angle FFT size (zero-padded virtual array, pow2)
 
     // ---- primary: frameCfg ----
     int   chirpStartIdx = 0;
@@ -47,6 +48,8 @@ struct RadarConfig {
     float dopplerResolutionMps = 0.f;
     float maxRange = 0.f;
     float maxVelocity = 0.f;
+    int   numVirtualAnt = 0;   // numTxAnt * numRxAnt (angle FFT aperture)
+    float lambdaM = 0.f;       // carrier wavelength c/startFreq (angle + phase->displacement)
 
     // Compute all derived fields from primary fields. Idempotent.
     void derive();

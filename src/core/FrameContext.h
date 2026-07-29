@@ -8,12 +8,17 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
 #include "core/FrameBuffer.h"
 
 namespace radar {
+
+// Declared in dsp/Detection.h; kept incomplete here so core/ never depends on
+// dsp/ (C++17 allows vector<T> with incomplete T at declaration point).
+struct Detection;
 
 struct FrameContext {
     // Application-level monotonic frame counter. uint64 => no practical overflow.
@@ -31,6 +36,21 @@ struct FrameContext {
 
     // Parsed complex tensor [chirp][rx][sample] (may be null before parsing).
     std::shared_ptr<FrameBuffer> parsed;
+
+    // ---- DSP products (filled progressively by dsp/ stages; null until produced) ----
+    // Range FFT output [chirp][rx][rangeBin].
+    std::shared_ptr<FrameBuffer> rangeCube;
+    // Doppler FFT output [doppler][rx][rangeBin], fftshifted (zero Doppler centered).
+    std::shared_ptr<FrameBuffer> dopplerCube;
+    // Range-Doppler map: linear power (|.|^2 summed over rx), row-major
+    // [doppler * numRangeBins + rangeBin]. Convert to dB only for display.
+    std::shared_ptr<std::vector<float>> rdMap;
+    // CA-CFAR detections (angle filled later by AngleFftStage).
+    std::shared_ptr<std::vector<Detection>> detections;
+    // Slow-time unwrapped phase at the tracked range bin (vital signs); NaN
+    // until PhaseUnwrapStage runs.
+    float unwrappedPhaseRad = std::numeric_limits<float>::quiet_NaN();
+    float displacementMm = std::numeric_limits<float>::quiet_NaN();
 
     // Timestamps for end-to-end latency measurement.
     std::chrono::steady_clock::time_point tCaptured{};

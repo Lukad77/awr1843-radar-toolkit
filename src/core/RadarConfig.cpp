@@ -53,6 +53,9 @@ void RadarConfig::derive() {
     if (startFreqGHz != 0.f && chirpT != 0.0) {
         maxVelocity = static_cast<float>(c / (4.0 * startFreqGHz * 1e9 * chirpT * tx));
     }
+
+    numVirtualAnt = (numTxAnt > 0 && numRxAnt > 0) ? numTxAnt * numRxAnt : 0;
+    lambdaM = startFreqGHz != 0.f ? static_cast<float>(c / (startFreqGHz * 1e9)) : 0.f;
 }
 
 bool RadarConfig::validate(std::string& err) const {
@@ -70,6 +73,8 @@ bool RadarConfig::validate(std::string& err) const {
     if (numChirpsPerFrame <= 0) fail("numChirpsPerFrame must be > 0 (call derive() first)");
     if (bytesPerFrame <= 0) fail("bytesPerFrame must be > 0 (call derive() first)");
     if (!isReal && bytesPerSample != 4) fail("complex sample must be 4 bytes");
+    if (numAngleBins <= 0 || (numAngleBins & (numAngleBins - 1)) != 0)
+        fail("numAngleBins must be a power of two");
 
     if (!ok) err = e.str();
     return ok;
