@@ -3,7 +3,7 @@ schema_version: 1
 locale: zh-CN
 branch: feature/cross-platform
 nodes_managed: true
-exported_at: "2026-07-14T09:12:31Z"
+exported_at: "2026-07-14T12:25:49Z"
 modules:
     "":
         dir_name: AWR1843-DCA1000 毫米波雷达数据采集与处理工具

@@ -370,3 +370,8 @@ CMakeFiles/
 cmake_install.cmake
 CTestTestfile.cmake
 Testing/
+# Dataset downloads (large binary files)
+data/
+
+# Python virtual environment
+.venv/
