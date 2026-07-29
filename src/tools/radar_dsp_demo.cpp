@@ -175,8 +175,8 @@ int main(int argc, char **argv) {
             << " deg, SNR=" << strongestSnr << " dB (rangeBin "
             << strongest.rangeBin << ")" << std::endl;
   std::cout << "呼吸相位跟踪 bin: " << phaseStage->targetBin() << " (≈"
-            << phaseStage->targetBin() * cfg.rangeIdxToMeters << " m)"
-            << std::endl;
+            << phaseStage->targetBin() * cfg.rangeIdxToMeters << " m), bin 切换 "
+            << phaseStage->switchCount() << " 次" << std::endl;
   std::cout << "相位波形 CSV: " << csvPath << std::endl;
   return invalid == 0 ? 0 : 1;
 }

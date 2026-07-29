@@ -375,3 +375,9 @@ data/
 
 # Python virtual environment
 .venv/
+
+# Intermediate results and plots (not for version control)
+*.png
+*.csv
+diagnose_*.py
+plot_*.py

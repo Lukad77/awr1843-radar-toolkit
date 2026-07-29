@@ -403,6 +403,189 @@ static void test_phase_unwrap() {
   ctx.rangeCube = cube;
   CHECK(autoStage.process(ctx));
   CHECK(autoStage.targetBin() == 7);
+  CHECK(ctx.phaseTrackBin == 7);                      // quality field: bin
+  CHECK(std::abs(ctx.phaseTrackAmp - 10.f) < 0.01f);  // quality field: raw amp
+}
+
+// Helper: frame with one complex value at `bin` (all chirps), tiny floor elsewhere.
+static std::shared_ptr<FrameBuffer> binFrame(int nBins, int bin, std::complex<float> v,
+                                             int bin2 = -1,
+                                             std::complex<float> v2 = {0.f, 0.f}) {
+  auto cube = std::make_shared<FrameBuffer>(
+      FrameShape{4, 1, static_cast<std::size_t>(nBins)});
+  for (std::size_t c = 0; c < 4; ++c) {
+    for (int b = 0; b < nBins; ++b) cube->at(c, 0, b) = {0.01f, 0.f};
+    cube->at(c, 0, bin) = v;
+    if (bin2 >= 0) cube->at(c, 0, bin2) = v2;
+  }
+  return cube;
+}
+
+// Plateau mechanism reproduced, then removed by the Kasa DC compensation:
+// v = S + a*e^{j*phi(t)} with |S| ~ 5a pins arg(v) near arg(S).
+static void test_phase_dc_compensation() {
+  RadarConfig cfg;
+  cfg.numRxAnt = 1;
+  cfg.numTxAnt = 1;
+  cfg.numAdcSamples = 16;
+  cfg.chirpStartIdx = 0;
+  cfg.chirpEndIdx = 0;
+  cfg.numLoops = 4;
+  cfg.startFreqGHz = 77.f;
+  cfg.derive();
+
+  const std::complex<float> S{50.f, 30.f};  // |S| = 58.3 ~ 5.8a
+  const float a = 10.f;
+  const int M = 200;
+  auto truth = [](int t) { return 0.8 * std::sin(2.0 * kPi * t / 40.0); };
+  auto sample = [&](int t) {
+    const double ph = truth(t);
+    return S + std::complex<float>(static_cast<float>(a * std::cos(ph)),
+                                   static_cast<float>(a * std::sin(ph)));
+  };
+
+  // A) compensation OFF => plateau: recovered p2p crushed to ~a/|S| scale.
+  {
+    PhaseUnwrapParams p;
+    p.targetRangeBin = 5;
+    p.dcCompensation = false;
+    PhaseUnwrapStage stage(cfg, p);
+    float lo = 1e9f, hi = -1e9f;
+    for (int t = 0; t < M; ++t) {
+      FrameContext ctx;
+      ctx.rangeCube = binFrame(16, 5, sample(t));
+      CHECK(stage.process(ctx));
+      if (t >= 40) {  // steady state, full cycles
+        lo = std::min(lo, ctx.unwrappedPhaseRad);
+        hi = std::max(hi, ctx.unwrappedPhaseRad);
+      }
+    }
+    const float truthP2p = 1.6f;
+    CHECK((hi - lo) < 0.35f * truthP2p);  // plateau reproduced
+  }
+
+  // B) compensation ON => center removed, waveform recovered.
+  {
+    PhaseUnwrapParams p;
+    p.targetRangeBin = 5;
+    p.dcCompensation = true;
+    p.dcWindowFrames = 64;
+    PhaseUnwrapStage stage(cfg, p);
+    std::vector<float> out(M);
+    for (int t = 0; t < M; ++t) {
+      FrameContext ctx;
+      ctx.rangeCube = binFrame(16, 5, sample(t));
+      CHECK(stage.process(ctx));
+      out[t] = ctx.unwrappedPhaseRad;
+    }
+    // After warmup, relative phase must match the truth waveform.
+    const int t0 = 120;
+    double maxErr = 0.0;
+    for (int t = t0; t < M; ++t)
+      maxErr = std::max(maxErr,
+                        std::abs((out[t] - out[t0]) - (truth(t) - truth(t0))));
+    CHECK(maxErr < 0.05);  // < 5% of the 1.6 rad p2p
+  }
+}
+
+// Bin switch: hysteresis-approved handover must not fabricate a phase step
+// even when the new bin carries an arbitrary static phase offset.
+static void test_phase_bridge_on_switch() {
+  RadarConfig cfg;
+  cfg.numRxAnt = 1;
+  cfg.numTxAnt = 1;
+  cfg.numAdcSamples = 16;
+  cfg.chirpStartIdx = 0;
+  cfg.chirpEndIdx = 0;
+  cfg.numLoops = 4;
+  cfg.derive();
+
+  PhaseUnwrapParams p;  // auto + followPeak
+  p.followPeak = true;
+  p.switchHoldFrames = 3;
+  p.switchRatio = 1.2f;
+  p.dcCompensation = false;  // isolate the bridging behavior
+  PhaseUnwrapStage stage(cfg, p);
+
+  const int M = 40;
+  std::vector<float> out(M);
+  for (int t = 0; t < M; ++t) {
+    const double th = 0.05 * t;   // common slow phase law
+    const double th6 = th + 2.0;  // bin6 carries a +2 rad offset
+    const float a5 = (t < 20) ? 10.f : 1.f;
+    const float a6 = (t < 20) ? 1.f : 10.f;
+    FrameContext ctx;
+    ctx.rangeCube = binFrame(16, 5,
+                             {static_cast<float>(a5 * std::cos(th)),
+                              static_cast<float>(a5 * std::sin(th))},
+                             6,
+                             {static_cast<float>(a6 * std::cos(th6)),
+                              static_cast<float>(a6 * std::sin(th6))});
+    CHECK(stage.process(ctx));
+    out[t] = ctx.unwrappedPhaseRad;
+  }
+
+  CHECK(stage.switchCount() == 1);
+  CHECK(stage.targetBin() == 6);
+  // No frame-to-frame step may approach the 2 rad offset: the bridge absorbs
+  // it (the switch frame contributes ~0, all others ~0.05).
+  bool noFakeJump = true;
+  for (int t = 1; t < M; ++t)
+    if (std::abs(out[t] - out[t - 1]) > 0.1f) noFakeJump = false;
+  CHECK(noFakeJump);
+}
+
+// Hysteresis: alternating +-5% amplitudes must never trigger a switch.
+static void test_phase_switch_hysteresis() {
+  RadarConfig cfg;
+  cfg.numRxAnt = 1;
+  cfg.numTxAnt = 1;
+  cfg.numAdcSamples = 16;
+  cfg.chirpStartIdx = 0;
+  cfg.chirpEndIdx = 0;
+  cfg.numLoops = 4;
+  cfg.derive();
+
+  PhaseUnwrapStage stage(cfg, PhaseUnwrapParams{});  // hold=5, ratio=1.25
+  for (int t = 0; t < 50; ++t) {
+    const float a4 = (t % 2 == 0) ? 10.5f : 9.5f;
+    const float a5 = (t % 2 == 0) ? 9.5f : 10.5f;
+    FrameContext ctx;
+    ctx.rangeCube = binFrame(16, 4, {a4, 0.f}, 5, {a5, 0.f});
+    CHECK(stage.process(ctx));
+  }
+  CHECK(stage.switchCount() == 0);
+  CHECK(stage.targetBin() == 4);  // locked on frame 0, never ping-pongs
+}
+
+// Degenerate circle fit (truly static target: zero-span window) must keep the
+// signal uncompensated -- stable output, no NaN, never a bogus center.
+static void test_phase_dc_degenerate() {
+  RadarConfig cfg;
+  cfg.numRxAnt = 1;
+  cfg.numTxAnt = 1;
+  cfg.numAdcSamples = 16;
+  cfg.chirpStartIdx = 0;
+  cfg.chirpEndIdx = 0;
+  cfg.numLoops = 4;
+  cfg.derive();
+
+  PhaseUnwrapParams p;
+  p.targetRangeBin = 5;
+  p.dcCompensation = true;
+  p.dcWindowFrames = 32;
+  PhaseUnwrapStage stage(cfg, p);
+
+  bool stable = true;
+  for (int t = 0; t < 100; ++t) {  // window fills; fit must stay degenerate
+    FrameContext ctx;
+    ctx.rangeCube = binFrame(16, 5, {10.f, 0.f});
+    CHECK(stage.process(ctx));
+    if (std::isnan(ctx.unwrappedPhaseRad) ||
+        std::abs(ctx.unwrappedPhaseRad) > 1e-5f)
+      stable = false;
+  }
+  CHECK(stable);
 }
 
 // ---------------------------------------------------------------------------
@@ -583,6 +766,10 @@ int main() {
   test_cfar();
   test_angle_fft();
   test_phase_unwrap();
+  test_phase_dc_compensation();
+  test_phase_bridge_on_switch();
+  test_phase_switch_hysteresis();
+  test_phase_dc_degenerate();
   test_clutter_removal();
   test_full_chain_pipeline();
 

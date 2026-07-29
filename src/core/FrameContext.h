@@ -52,6 +52,11 @@ struct FrameContext {
   // until PhaseUnwrapStage runs.
   float unwrappedPhaseRad = std::numeric_limits<float>::quiet_NaN();
   float displacementMm = std::numeric_limits<float>::quiet_NaN();
+  // Phase-track quality: tracked bin + its raw chirp-mean magnitude.
+  // Amplitude collapse marks frames where the phase is unreliable
+  // (composite phasor near the origin) => consumers gate on it.
+  int phaseTrackBin = -1;
+  float phaseTrackAmp = std::numeric_limits<float>::quiet_NaN();
 
   // Timestamps for end-to-end latency measurement.
   std::chrono::steady_clock::time_point tCaptured{};
