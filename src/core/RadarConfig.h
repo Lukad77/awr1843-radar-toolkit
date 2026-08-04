@@ -1,27 +1,26 @@
 #pragma once
-// RadarConfig.h — single source of truth for acquisition + processing params.
+// RadarConfig.h — 采集 + 处理参数的单一事实源。
 //
-// Consolidates what used to be three drifting representations (RadarParams,
-// AWR1843Controller::ConfigParams, and the loose frameCfg fields). Primary
-// fields are set from the .cfg / user; derive() computes every dependent value
-// (bytesPerFrame, numRangeBins, resolutions, ...) exactly once, and validate()
-// catches inconsistencies before they corrupt frame reassembly/parsing.
+// 收敛了过去三处漂移的表示（RadarParams、AWR1843Controller::ConfigParams
+// 以及松散的 frameCfg 字段）。主字段由 .cfg/用户设置；derive() 一次性
+// 计算全部派生值（bytesPerFrame、numRangeBins、分辨率等），validate()
+// 在不一致性破坏帧重组/解析之前就把它们拦下。
 
 #include <string>
 
 namespace radar {
 
 struct RadarConfig {
-  // ---- primary: data format ----
+  // ---- 主字段：数据格式 ----
   int numAdcBits = 16;
-  bool isReal = false; // false => complex I/Q (4 bytes/sample)
+  bool isReal = false; // false => 复数 I/Q（4 字节/采样点）
   int numRxAnt = 4;
   int numTxAnt = 1;
   int numAdcSamples = 256;
-  int rxIdx = 0;         // selected Rx for single-Rx parse (0-based)
-  int numAngleBins = 64; // angle FFT size (zero-padded virtual array, pow2)
+  int rxIdx = 0;         // 单 Rx 解析时选用的天线（0 基）
+  int numAngleBins = 64; // 角度 FFT 点数（零填充虚拟阵列，2 的幂）
 
-  // ---- primary: frameCfg ----
+  // ---- 主字段：frameCfg ----
   int chirpStartIdx = 0;
   int chirpEndIdx = 0;
   int numLoops = 0;
@@ -30,32 +29,31 @@ struct RadarConfig {
   int triggerSelect = 0;
   float triggerDelay = 0.f;
 
-  // ---- primary: profileCfg ----
+  // ---- 主字段：profileCfg ----
   float startFreqGHz = 0.f;
   float idleTimeUs = 0.f;
   float rampEndTimeUs = 0.f;
   float freqSlopeMHzPerUs = 0.f;
   int digOutSampleRateKsps = 0;
 
-  // ---- derived (filled by derive()) ----
+  // ---- 派生字段（由 derive() 填充）----
   int numChirpsPerFrame = 0;
   int numDopplerBins = 0;
   int numRangeBins = 0;
-  int bytesPerSample = 4; // 4 (complex int16) or 2 (real int16)
+  int bytesPerSample = 4; // 4（复数 int16）或 2（实数 int16）
   long bytesPerFrame = 0; // chirps * rx * samples * bytesPerSample
   float rangeResolutionMeters = 0.f;
   float rangeIdxToMeters = 0.f;
   float dopplerResolutionMps = 0.f;
   float maxRange = 0.f;
   float maxVelocity = 0.f;
-  int numVirtualAnt = 0; // numTxAnt * numRxAnt (angle FFT aperture)
-  float lambdaM =
-      0.f; // carrier wavelength c/startFreq (angle + phase->displacement)
+  int numVirtualAnt = 0; // numTxAnt * numRxAnt（角度 FFT 孔径）
+  float lambdaM = 0.f;   // 载波波长 c/startFreq（角度换算 + 相位→位移都要用）
 
-  // Compute all derived fields from primary fields. Idempotent.
+  // 由主字段计算全部派生字段。幂等。
   void derive();
 
-  // Returns true if consistent; otherwise fills `err` with the reasons.
+  // 一致则返回 true；否则把原因写入 `err`。
   bool validate(std::string &err) const;
 };
 

@@ -11,12 +11,12 @@ RangeFftStage::RangeFftStage(const RadarConfig &cfg,
 
 bool RangeFftStage::process(FrameContext &ctx) {
   if (!ctx.valid || !ctx.parsed)
-    return true; // flagged upstream, pass through
+    return true; // 上游已标记，直接透传
 
   const FrameBuffer &in = *ctx.parsed;
   const FrameShape s = in.shape(); // {chirps, rx, samples}
   if (s.samples != static_cast<std::size_t>(cfg_.numAdcSamples)) {
-    ctx.valid = false; // config drift: flag, never process garbage
+    ctx.valid = false; // 配置漂移：标记，绝不处理脏数据
     return true;
   }
 
@@ -40,7 +40,7 @@ bool RangeFftStage::process(FrameContext &ctx) {
       for (std::size_t i = s.samples; i < nBins; ++i)
         dst[i] = {0.f, 0.f};
 
-      plan_.forward(dst); // in-place, contiguous row
+      plan_.forward(dst); // 原位变换，连续内存行
     }
   }
 

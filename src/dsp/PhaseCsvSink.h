@@ -1,8 +1,8 @@
 #pragma once
-// PhaseCsvSink.h — appends "frameSeq,unwrappedPhaseRad,displacementMm,
-// trackBin,trackAmp" per frame: waveform plus the quality columns needed for
-// amplitude gating (trackAmp collapse == unreliable phase samples).
-// Runs on the pipeline worker (IResultSink fan-out), so no locking needed.
+// PhaseCsvSink.h — 逐帧追加 "frameSeq,unwrappedPhaseRad,displacementMm,
+// trackBin,trackAmp"：波形加上幅度门控所需的质量列
+// （trackAmp 塌陷 == 相位采样不可靠）。
+// 运行在流水线 worker 上（IResultSink 扇出），无需加锁。
 
 #include <cmath>
 #include <fstream>

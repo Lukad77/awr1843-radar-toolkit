@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: ""
+title: AWR1843-DCA1000 毫米波雷达采集与处理工具（根模块）
+scope:
+    - CMakeLists.txt
+    - README.md
+source_files: []
+depends_on: []
+related_to: []

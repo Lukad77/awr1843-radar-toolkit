@@ -17,7 +17,7 @@ int nextPow2(int n) {
 void RadarConfig::derive() {
   bytesPerSample = isReal ? 2 : 4;
 
-  // numChirpsPerFrame from frameCfg when available; otherwise keep as-is.
+  // 有 frameCfg 时由其计算 numChirpsPerFrame；否则保持现值。
   if (numLoops > 0 && chirpEndIdx >= chirpStartIdx) {
     numChirpsPerFrame = (chirpEndIdx - chirpStartIdx + 1) * numLoops;
   }
@@ -31,8 +31,8 @@ void RadarConfig::derive() {
   bytesPerFrame = static_cast<long>(numChirpsPerFrame) * numRxAnt *
                   numAdcSamples * bytesPerSample;
 
-  // Radar resolution formulas (units: startFreq GHz, times us, slope MHz/us,
-  // sample rate ksps). Mirror the legacy AWR1843Controller computation.
+  // 雷达分辨率公式（单位：startFreq GHz、时间 us、斜率 MHz/us、
+  // 采样率 ksps）。与遗留 AWR1843Controller 的计算保持一致。
   const double c = 3e8;
   const double chirpT = (idleTimeUs + rampEndTimeUs) * 1e-6;
 

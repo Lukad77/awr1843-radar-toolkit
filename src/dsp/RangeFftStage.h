@@ -1,12 +1,11 @@
 #pragma once
-// RangeFftStage.h — per-chirp/per-rx range FFT: parsed [chirp][rx][sample]
-// -> rangeCube [chirp][rx][rangeBin].
+// RangeFftStage.h — 逐 chirp/逐 rx 的距离 FFT：parsed [chirp][rx][sample]
+// -> rangeCube [chirp][rx][rangeBin]。
 //
-// Per row: optional DC removal (subtract mean to suppress the zero-range
-// leakage), Hann window, zero-pad to numRangeBins (pow2), in-place radix-2
-// FFT. The sample axis is the innermost (contiguous) dimension of FrameBuffer,
-// so every transform runs over contiguous memory. Window + plan + output pool
-// are prepared at construction: process() is allocation-free in steady state.
+// 每行处理：可选 DC 去除（减均值以抑制零距离泄漏）、Hann 加窗、
+// 零填充到 numRangeBins（2 的幂）、原位 radix-2 FFT。sample 轴是
+// FrameBuffer 的最内（连续）维，因此每次变换都在连续内存上进行。
+// 窗/plan/输出池均在构造期准备好：process() 稳态零分配。
 
 #include <memory>
 #include <vector>
@@ -28,14 +27,14 @@ public:
 
   const char *name() const override { return "RangeFFT"; }
 
-  // Reads ctx.parsed, fills ctx.rangeCube. Invalid/absent input passes
-  // through untouched (flagged upstream, never a silent drop).
+  // 读 ctx.parsed，填 ctx.rangeCube。无效/缺失的输入原样透传
+  // （上游已标记，绝不静默丢弃）。
   bool process(FrameContext &ctx) override;
 
 private:
   RadarConfig cfg_;
-  FftPlan plan_;           // numRangeBins
-  std::vector<float> win_; // Hann over numAdcSamples
+  FftPlan plan_;           // numRangeBins 点
+  std::vector<float> win_; // 覆盖 numAdcSamples 的 Hann 窗
   std::shared_ptr<BufferPool<FrameBuffer>> pool_;
   bool removeDc_;
 };

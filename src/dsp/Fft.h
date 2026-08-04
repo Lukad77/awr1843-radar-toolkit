@@ -1,15 +1,14 @@
 #pragma once
-// Fft.h — self-contained iterative radix-2 FFT (no external dependency).
+// Fft.h — 自包含的迭代 radix-2 FFT（零外部依赖）。
 //
-// Rationale: every transform size in this pipeline is a power of two by
-// construction (RadarConfig::derive() rounds numRangeBins up; doppler size ==
-// numChirpsPerFrame; numAngleBins validated pow2), and the sizes are tiny
-// (64..256), where a table-driven radix-2 runs in microseconds. FftPlan is the
-// seam to swap in pffft/FFTW later without touching any stage.
+// 选型理由：本流水线中所有变换点数构造上就是 2 的幂
+// （RadarConfig::derive() 对 numRangeBins 上取整；多普勒点数 ==
+// numChirpsPerFrame；numAngleBins 经过 pow2 校验），且点数很小
+// （64..256），查表式 radix-2 微秒级完成。FftPlan 是接缝，
+// 日后可换成 pffft/FFTW 而不动任何 stage。
 //
-// FftPlan precomputes the bit-reversal permutation and twiddle table once at
-// construction; forward() is allocation-free and safe to call concurrently
-// from multiple threads (all state is read-only after construction).
+// FftPlan 在构造期一次性预计算位反转置换与旋转因子表；
+// forward() 零分配，且可多线程并发调用（构造后全部状态只读）。
 
 #include <complex>
 #include <cstddef>
@@ -19,24 +18,24 @@ namespace radar {
 
 class FftPlan {
 public:
-  // n must be a power of two (>= 1); throws std::invalid_argument otherwise.
+  // n 必须是 2 的幂（>= 1）；否则抛 std::invalid_argument。
   explicit FftPlan(std::size_t n);
 
   std::size_t size() const noexcept { return n_; }
 
-  // In-place, unnormalized forward DFT: X[k] = sum x[n] e^{-2*pi*i*k*n/N}.
+  // 原位、非归一化正向 DFT：X[k] = sum x[n] e^{-2*pi*i*k*n/N}。
   void forward(std::complex<float> *x) const;
 
 private:
   std::size_t n_;
-  std::vector<std::size_t> rev_;        // bit-reversal permutation
-  std::vector<std::complex<float>> tw_; // W_n^k, k in [0, n/2)
+  std::vector<std::size_t> rev_;        // 位反转置换表
+  std::vector<std::complex<float>> tw_; // 旋转因子 W_n^k，k ∈ [0, n/2)
 };
 
-// Swap halves so zero frequency lands in the center (n must be even).
+// 交换两半，使零频落在中心（n 必须为偶数）。
 void fftshift(std::complex<float> *x, std::size_t n);
 
-// Symmetric Hann window of length n (n>=1; returns {1} for n==1).
+// 长度为 n 的对称 Hann 窗（n>=1；n==1 时返回 {1}）。
 std::vector<float> makeHannWindow(std::size_t n);
 
 } // namespace radar

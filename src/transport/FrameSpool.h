@@ -1,17 +1,17 @@
 #pragma once
-// FrameSpool.h — two-tier lossless FIFO for fixed-size raw frames (Phase 2).
+// FrameSpool.h — 定长原始帧的两级无损 FIFO（Phase 2）。
 //
-// Tier 1: bounded RAM ring (deque up to ramCapFrames).
-// Tier 2: when RAM is full, spill to a disk file so the producer (the socket
-//         drain thread) NEVER blocks and NEVER drops. This is the concrete
-//         "record-then-process" safety net: capacity is bounded by disk, not RAM.
+// 第一级：有界 RAM 环（deque，最多 ramCapFrames 帧）。
+// 第二级：RAM 满时溢写到磁盘文件，使生产者（socket 排空线程）
+//         永不阻塞、永不丢帧。这就是 “record-then-process” 充当安全网的
+//         具体落地：容量由磁盘而非 RAM 限定。
 //
-// FIFO order is preserved across the RAM->disk boundary: the reader drains RAM
-// first (it holds the oldest frames), then disk; and once spilling starts, new
-// frames keep going to disk until it fully drains (then RAM is used again).
+// FIFO 顺序跨 RAM->磁盘边界保持：读者先排空 RAM（它持有最旧的帧），
+// 再读磁盘；一旦开始溢写，新帧持续写磁盘直到磁盘完全排空
+// （之后才重新启用 RAM）。
 //
-// push() is non-blocking and lossless; it returns false only when closed or on
-// a disk write error (the explicit overload condition to alarm on).
+// push() 非阻塞且无损；仅在已关闭或磁盘写入错误（需告警的显式
+// 过载条件）时返回 false。
 
 #include <condition_variable>
 #include <cstddef>
@@ -26,43 +26,44 @@ namespace radar {
 
 class FrameSpool {
 public:
-    FrameSpool(std::size_t frameBytes, std::size_t ramCapFrames, std::string spillPath);
-    ~FrameSpool();
+  FrameSpool(std::size_t frameBytes, std::size_t ramCapFrames,
+             std::string spillPath);
+  ~FrameSpool();
 
-    FrameSpool(const FrameSpool&) = delete;
-    FrameSpool& operator=(const FrameSpool&) = delete;
+  FrameSpool(const FrameSpool &) = delete;
+  FrameSpool &operator=(const FrameSpool &) = delete;
 
-    // Non-blocking, lossless. frame.size() must equal frameBytes.
-    // Returns false when closed or on disk write error (overload).
-    bool push(std::vector<std::uint8_t> frame);
+  // 非阻塞、无损。frame.size() 必须等于 frameBytes。
+  // 仅在已关闭或磁盘写错误（过载）时返回 false。
+  bool push(std::vector<std::uint8_t> frame);
 
-    // Blocking, FIFO. Returns false only when closed AND fully drained.
-    bool pop(std::vector<std::uint8_t>& out);
+  // 阻塞、FIFO。仅在已关闭且完全排空后返回 false。
+  bool pop(std::vector<std::uint8_t> &out);
 
-    void close();
+  void close();
 
-    // Metrics (each takes the lock).
-    std::size_t ramDepth() const;
-    std::size_t diskPending() const;
-    std::size_t diskPeak() const;  // max disk backlog ever seen (>0 => spilled)
+  // 指标查询（每个都取锁）。
+  std::size_t ramDepth() const;
+  std::size_t diskPending() const;
+  std::size_t diskPeak() const; // 磁盘积压历史峰值（>0 => 发生过溢写）
 
 private:
-    bool diskWrite(const std::vector<std::uint8_t>& f);  // caller holds lock
-    bool diskRead(std::vector<std::uint8_t>& out);       // caller holds lock
+  bool diskWrite(const std::vector<std::uint8_t> &f); // 调用方持锁
+  bool diskRead(std::vector<std::uint8_t> &out);      // 调用方持锁
 
-    mutable std::mutex m_;
-    std::condition_variable cv_;
-    std::size_t frameBytes_;
-    std::size_t ramCap_;
-    std::deque<std::vector<std::uint8_t>> ram_;
-    bool spilling_ = false;
-    bool closed_ = false;
+  mutable std::mutex m_;
+  std::condition_variable cv_;
+  std::size_t frameBytes_;
+  std::size_t ramCap_;
+  std::deque<std::vector<std::uint8_t>> ram_;
+  bool spilling_ = false;
+  bool closed_ = false;
 
-    std::string path_;
-    std::fstream file_;
-    std::size_t writeOff_ = 0;  // in frames
-    std::size_t readOff_ = 0;   // in frames
-    std::size_t diskPeak_ = 0;
+  std::string path_;
+  std::fstream file_;
+  std::size_t writeOff_ = 0; // 单位：帧
+  std::size_t readOff_ = 0;  // 单位：帧
+  std::size_t diskPeak_ = 0;
 };
 
-}  // namespace radar
+} // namespace radar

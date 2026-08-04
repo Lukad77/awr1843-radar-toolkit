@@ -6,26 +6,34 @@ scope:
     - '**'
 source_files:
     - CMakeLists.txt
-    - awr1843_dca1000_read/cf.json
-    - awr1843_dca1000_read/net_compat.h
 ---
 
-本项目采用 CMake 作为唯一官方构建系统，目标为在 Linux、macOS、Windows 三平台上编译同一套 C++17 源码。根目录仅有一个 CMakeLists.txt，所有业务源码集中在 awr1843_dca1000_read/ 子目录，无 Makefile、Shell 脚本或 Dockerfile。
+本项目采用 CMake 作为唯一构建系统，目标为跨平台（Linux/Windows/macOS）的 C++17 工具链。根目录仅包含一个 `CMakeLists.txt`，未使用 Makefile、Dockerfile、CI 脚本或版本发布脚本。
 
-构建目标与产物：
-- test_udp：轻量测试入口，仅依赖 UDP 接收与数据解析组件（UdpReceiver.cpp + DataParser.cpp），不含串口链，用于配合 Python 回放泵验证网络链路，三平台均可构建。
-- radar_full：完整程序，包含 AWR1843 串口控制（WzSerialportPlus.cpp）、UDP 控制通道（UDPController.cpp）以及主流程（awr1843_dca1000_read.cpp）。
+**构建配置与标准**
+- 最低 CMake 版本 3.15，强制启用 C++17（`CMAKE_CXX_STANDARD 17`），关闭编译器扩展以保证可移植性。
+- 默认构建类型为 Release；线程库通过 `find_package(Threads)` 发现，POSIX 下链接 pthread，Windows 为空实现。
 
-跨平台策略：
-- 线程库通过 find_package(Threads) 获取，POSIX 下链接 pthread，Windows 上为空实现；Windows 额外显式链接 ws2_32 以支持 Winsock。
-- 源码中通过 net_compat.h 的 #pragma comment(lib,"ws2_32.lib") 与条件编译屏蔽 Windows-only 头文件，使 test_udp 可在 macOS(clang) 直接编译。
-- 串口层 WzSerialportPlus 使用 POSIX termios API，Windows 侧未提供等价实现，因此该 target 在 Windows 上需跳过串口相关源文件。
+**目标产物组织**
+CMakeLists.txt 按功能阶段定义多个独立可执行目标，每个目标对应一组源文件并注册为 CTest 测试：
+- `radar_core_tests`：基础组件单测（RadarConfig、SPSC 队列、FrameBuffer、BufferPool）
+- `radar_pipeline_tests`：流水线骨架单测（ParseStage、Pipeline 保序与无损）
+- `radar_spool_tests`：两级无损 FrameSpool 单测（RAM→磁盘溢写 FIFO 一致性）
+- `radar_dsp_tests`：Phase4 DSP 算子单测（FFT、Range/Doppler/CFAR/Angle FFT、相位解缠绕）
+- `radar_dsp_demo`：真实数据集端到端 DSP 链 demo（无硬件回归入口）
 
-配置与资源：
-- 运行时参数通过 JSON 配置文件 cf.json 注入，定义 DCA1000 采集模式、LVDS 模式、数据格式等字段。
-- 雷达 chirp 序列配置以 .cfg 文本文件（1T1R.cfg、awr1843.cfg）形式随源码分发，由上层读取后下发至设备 CLI。
+所有目标均通过 `target_include_directories` 指向 `src/`，并通过 `target_compile_features` 显式声明 cxx_std_17，避免隐式依赖。
 
-开发者约定：
-- 新增可执行目标应在根 CMakeLists.txt 中以 add_executable 声明，并将新源文件加入对应 target 的源列表。
-- 平台差异优先通过 #ifdef WIN32 / net_compat.h 解决，避免在业务逻辑中散落平台分支。
-- 第三方库应通过 find_package 引入并链接到具体 target，而非全局设置。
+**跨平台策略**
+- 构建系统本身不区分平台，依赖 CMake 的 `CMAKE_SYSTEM_NAME` 在配置时输出当前平台信息。
+- 线程库通过 Threads::Threads 抽象层屏蔽平台差异。
+- 注释中多次强调“三平台”、“零外部依赖”，表明设计目标是纯标准库 + 自研 DSP 实现，无需 TI SDK 即可编译运行。
+
+**测试集成**
+- 通过 `enable_testing()` 和 `add_test()` 将每个可执行目标注册为 CTest 用例，可直接通过 `ctest` 运行全部测试。
+
+**缺失部分**
+- 未发现 CI/CD 配置文件（如 .github/workflows、Jenkinsfile、azure-pipelines.yml 等）
+- 未发现 Dockerfile、容器化脚本或交叉编译脚本
+- 未发现版本管理脚本（build.sh、release.sh 等）
+- 未发现包管理器配置（vcpkg.json、Conanfile、package.xml 等）

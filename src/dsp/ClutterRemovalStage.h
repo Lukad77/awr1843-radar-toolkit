@@ -1,24 +1,23 @@
 #pragma once
-// ClutterRemovalStage.h — MTI static clutter suppression on the range cube.
+// ClutterRemovalStage.h — 在 range cube 上做 MTI 静态杂波抑制。
 //
-// Maintains a per-(rx, rangeBin) clutter map = exponential moving average
-// (EMA) of the chirp-mean of rangeCube across frames, and subtracts it from
-// every chirp IN PLACE. Truly static returns (antenna coupling at bin 0,
-// walls, furniture) converge into the map and vanish from the Doppler/CFAR
-// path; anything with per-chirp Doppler rotation has a near-zero chirp-mean
-// and passes through untouched.
+// 按 (rx, rangeBin) 维护杂波图 = rangeCube 逐帧 chirp 均值的指数
+// 滑动平均（EMA），并从每个 chirp 上**原位**减除。真正静止的
+// 回波（bin 0 处的天线耦合、墙体、家具）会收敛进杂波图，从
+// Doppler/CFAR 路径上消失；带逐 chirp 多普勒旋转的信号 chirp
+// 均值近零，原样通过不受影响。
 //
-// alpha semantics: map <- (1-alpha)*map + alpha*chirpMean, i.e. the map
-// adapts with a time constant of ~1/alpha frames. The first frame seeds the
-// map directly (so bin-0 leakage is suppressed from frame 1).
+// alpha 语义：map <- (1-alpha)*map + alpha*chirpMean，即杂波图以
+// ~1/alpha 帧的时间常数自适应。首帧直接播种杂波图
+// （因此 bin-0 泄漏从第 1 帧起就被抑制）。
 //
-// ORDERING CONSTRAINT: this stage modifies rangeCube in place. The residual
-// phasor after subtraction no longer satisfies phi = 4*pi*d/lambda, so
-// PhaseUnwrapStage (vital signs) must run BEFORE this stage:
+// 顺序约束：本 stage 原位修改 rangeCube。减除后的残差相量不再
+// 满足 phi = 4*pi*d/lambda，因此 PhaseUnwrapStage（生命体征）
+// 必须在本 stage 之前运行：
 //   RangeFFT -> PhaseUnwrap -> ClutterRemoval -> DopplerFFT -> CFAR -> ...
 //
-// Stateful (map persists across frames) but single-writer safe: Pipeline
-// runs all stages on one worker thread.
+// 有状态（杂波图跨帧保持）但单写者安全：Pipeline 在单个 worker
+// 线程上运行全部 stage。
 
 #include <complex>
 #include <vector>
@@ -29,21 +28,21 @@ namespace radar {
 
 class ClutterRemovalStage : public IStage {
 public:
-    // alpha in [0, 1]: EMA update weight per frame (~1/alpha frames to adapt).
-    explicit ClutterRemovalStage(float alpha = 0.02f);
+  // alpha ∈ [0, 1]：每帧 EMA 更新权重（自适应时间常数 ~1/alpha 帧）。
+  explicit ClutterRemovalStage(float alpha = 0.02f);
 
-    const char* name() const override { return "ClutterRemoval"; }
+  const char *name() const override { return "ClutterRemoval"; }
 
-    // Subtracts the clutter map from ctx.rangeCube in place, then updates the
-    // map with this frame's chirp-mean. Shape change resets the map.
-    bool process(FrameContext& ctx) override;
+  // 从 ctx.rangeCube 原位减去杂波图，再用本帧 chirp 均值更新
+  // 杂波图。形状变化时重置杂波图。
+  bool process(FrameContext &ctx) override;
 
 private:
-    float alpha_;
-    bool init_ = false;
-    std::size_t mapRx_ = 0, mapBins_ = 0;           // shape guard
-    std::vector<std::complex<float>> map_;          // [rx * rangeBins]
-    std::vector<std::complex<float>> mean_;         // per-frame scratch
+  float alpha_;
+  bool init_ = false;
+  std::size_t mapRx_ = 0, mapBins_ = 0;   // 形状守卫
+  std::vector<std::complex<float>> map_;  // [rx * rangeBins]
+  std::vector<std::complex<float>> mean_; // 逐帧暂存
 };
 
-}  // namespace radar
+} // namespace radar

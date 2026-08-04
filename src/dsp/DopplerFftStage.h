@@ -1,13 +1,12 @@
 #pragma once
-// DopplerFftStage.h — slow-time FFT across chirps: rangeCube [chirp][rx][bin]
-// -> dopplerCube [doppler][rx][bin] (fftshifted, zero Doppler centered) plus
-// the non-coherently integrated RD map used by CFAR.
+// DopplerFftStage.h — 跨 chirp 的慢时间 FFT：rangeCube [chirp][rx][bin]
+// -> dopplerCube [doppler][rx][bin]（已 fftshift，零多普勒居中），
+// 并生成供 CFAR 使用的非相干积累 RD 图。
 //
-// The chirp axis is strided in memory; each (rx, rangeBin) column is gathered
-// into a small scratch vector (numChirps elements, cache-trivial), windowed,
-// transformed, then scattered back with the fftshift applied. rdMap holds
-// linear power (|.|^2 summed over rx) — CFAR needs the linear domain; convert
-// to dB only for display.
+// chirp 轴在内存中是跨步的；每个 (rx, rangeBin) 列先 gather 到小
+// scratch 向量（numChirps 个元素，缓存开销可忽略），加窗、变换，
+// 再带着 fftshift scatter 回去。rdMap 存线性功率（|.|^2 沿 rx 求和）
+// —— CFAR 需要线性域；仅在显示时才转 dB。
 
 #include <memory>
 #include <vector>
@@ -28,14 +27,14 @@ public:
 
   const char *name() const override { return "DopplerFFT"; }
 
-  // Reads ctx.rangeCube, fills ctx.dopplerCube + ctx.rdMap.
+  // 读 ctx.rangeCube，填 ctx.dopplerCube + ctx.rdMap。
   bool process(FrameContext &ctx) override;
 
 private:
   RadarConfig cfg_;
-  FftPlan plan_;                             // numChirpsPerFrame
-  std::vector<float> win_;                   // Hann over chirps
-  std::vector<std::complex<float>> scratch_; // one chirp column
+  FftPlan plan_;                             // numChirpsPerFrame 点
+  std::vector<float> win_;                   // 覆盖 chirp 维的 Hann 窗
+  std::vector<std::complex<float>> scratch_; // 单个 chirp 列的暂存
   std::shared_ptr<BufferPool<FrameBuffer>> pool_;
 };
 

@@ -1,22 +1,21 @@
-// radar_dsp_demo.cpp — end-to-end DSP chain over a recorded ADC bin file
-// (no hardware): Parse -> RangeFFT -> PhaseUnwrap -> ClutterRemoval ->
-// DopplerFFT -> CA-CFAR -> AngleFFT, with per-stage timing and a
-// respiration-phase CSV.
+// radar_dsp_demo.cpp — 对录制的 ADC bin 文件跑端到端 DSP 链
+// （无硬件）：Parse -> RangeFFT -> PhaseUnwrap -> ClutterRemoval ->
+// DopplerFFT -> CA-CFAR -> AngleFFT，带逐 stage 计时与呼吸相位 CSV。
 //
-// PhaseUnwrap runs BEFORE ClutterRemoval on purpose: the vital-signs phase
-// must come from the unfiltered rangeCube (see ClutterRemovalStage.h), while
-// Doppler/CFAR consume the clutter-suppressed cube.
+// PhaseUnwrap 有意放在 ClutterRemoval 之前：生命体征相位必须取自
+// 未滤波的 rangeCube（见 ClutterRemovalStage.h），而 Doppler/CFAR
+// 消费杂波抑制后的 cube。
 //
-// Stages are invoked sequentially on this thread (same code path the
-// Pipeline worker runs) so each stage can be timed individually.
+// 各 stage 在本线程上顺序调用（与 Pipeline worker 相同的代码
+// 路径），便于对每个 stage 独立计时。
 //
-// Usage:
+// 用法：
 //   radar_dsp_demo <adc_raw.bin> [maxFrames] [phase.csv]
-//     maxFrames: 0 = whole file (default)
-//     phase.csv: default "radar_phase.csv"
+//     maxFrames: 0 = 整个文件（默认）
+//     phase.csv: 默认 "radar_phase.csv"
 //
-// Dataset default: 4 Rx x 64 chirps x 256 samples complex int16
-// (262144 B/frame), AWR1843 77 GHz profile.
+// 数据集默认参数：4 Rx x 64 chirps x 256 samples 复数 int16
+// （262144 B/帧），AWR1843 77 GHz 剖面。
 
 #include <chrono>
 #include <cmath>
@@ -98,7 +97,8 @@ int main(int argc, char **argv) {
   std::vector<std::shared_ptr<IStage>> stages = {
       std::make_shared<ParseStage>(cfg, /*allRx=*/true, mkPool()),
       std::make_shared<RangeFftStage>(cfg, mkPool()),
-      phaseStage,  // 生命体征相位取自未滤波 rangeCube（见 ClutterRemovalStage.h）
+      phaseStage, // 生命体征相位取自未滤波 rangeCube（见
+                  // ClutterRemovalStage.h）
       std::make_shared<ClutterRemovalStage>(/*alpha=*/0.02f),
       std::make_shared<DopplerFftStage>(cfg, mkPool()),
       std::make_shared<CfarStage>(cfg),
@@ -157,9 +157,9 @@ int main(int argc, char **argv) {
   if (frames == 0)
     return 1;
   double totalMs = 0.0;
-  const char *names[] = {"Parse",          "RangeFFT", "PhaseUnwrap",
-                       "ClutterRemoval", "DopplerFFT", "CA-CFAR",
-                       "AngleFFT"};
+  const char *names[] = {"Parse",          "RangeFFT",   "PhaseUnwrap",
+                         "ClutterRemoval", "DopplerFFT", "CA-CFAR",
+                         "AngleFFT"};
   for (std::size_t i = 0; i < stages.size(); ++i) {
     std::cout << "  " << names[i] << ": " << stageMs[i] / frames << " ms/帧"
               << std::endl;
@@ -175,8 +175,9 @@ int main(int argc, char **argv) {
             << " deg, SNR=" << strongestSnr << " dB (rangeBin "
             << strongest.rangeBin << ")" << std::endl;
   std::cout << "呼吸相位跟踪 bin: " << phaseStage->targetBin() << " (≈"
-            << phaseStage->targetBin() * cfg.rangeIdxToMeters << " m), bin 切换 "
-            << phaseStage->switchCount() << " 次" << std::endl;
+            << phaseStage->targetBin() * cfg.rangeIdxToMeters
+            << " m), bin 切换 " << phaseStage->switchCount() << " 次"
+            << std::endl;
   std::cout << "相位波形 CSV: " << csvPath << std::endl;
   return invalid == 0 ? 0 : 1;
 }

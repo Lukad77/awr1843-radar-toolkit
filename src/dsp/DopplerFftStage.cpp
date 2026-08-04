@@ -30,13 +30,13 @@ bool DopplerFftStage::process(FrameContext &ctx) {
       for (std::size_t c = 0; c < C; ++c)
         scratch_[c] = in.at(c, r, b) * win_[c];
       plan_.forward(scratch_.data());
-      // Scatter with fftshift: shifted[d] = unshifted[(d + C/2) % C].
+      // 带 fftshift 的 scatter：shifted[d] = unshifted[(d + C/2) % C]。
       for (std::size_t d = 0; d < C; ++d)
         out->at(d, r, b) = scratch_[(d + half) % C];
     }
   }
 
-  // Non-coherent integration over rx: linear power RD map for CFAR.
+  // 沿 rx 非相干积累：生成供 CFAR 使用的线性功率 RD 图。
   auto rd = std::make_shared<std::vector<float>>(C * s.samples);
   for (std::size_t d = 0; d < C; ++d) {
     for (std::size_t b = 0; b < s.samples; ++b) {

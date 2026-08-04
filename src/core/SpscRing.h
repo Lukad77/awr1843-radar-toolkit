@@ -1,21 +1,19 @@
 #pragma once
-// SpscRing.h — bounded, blocking queue used between pipeline stages.
+// SpscRing.h — 用于流水线各级之间的有界阻塞队列。
 //
-// This replaces the misuse of UnlockQueue (whose producer advanced `_out` in
-// its overflow branch, racing the consumer and silently dropping/reordering
-// frames). Here the contract is explicit and lossless-by-default:
+// 替代被误用的 UnlockQueue（其生产者在溢出分支里推进 `_out`，
+// 与消费者竞争并静默丢弃/乱序帧）。这里的契约是显式且默认无损的：
 //
-//   push()     : BLOCKS when full  -> backpressure propagates upstream.
-//   try_push() : NEVER blocks, returns false when full. Used by the socket
-//                drain thread, which must never block (else the kernel drops
-//                UDP). On false it routes the item to the FrameSpool instead.
-//   pop()      : BLOCKS when empty, returns false only after close() && drained.
-//   try_pop()  : NEVER blocks.
-//   close()    : wakes all waiters for a clean shutdown.
+//   push()     : 满则阻塞 -> 背压向上游传播。
+//   try_push() : 永不阻塞，满则返回 false。供 socket 排空线程使用，
+//                它绝不能阻塞（否则内核丢 UDP 包）。返回 false 时
+//                改将数据路由到 FrameSpool。
+//   pop()      : 空则阻塞，仅在 close() 且排空后返回 false。
+//   try_pop()  : 永不阻塞。
+//   close()    : 唤醒所有等待者，干净地关闭。
 //
-// Correctness first: implemented with a mutex + two condition variables. It is
-// safe for multiple producers/consumers; a lock-free variant is a later
-// (Phase 6) optimization and can drop in behind the same interface.
+// 正确性优先：用 mutex + 两个条件变量实现。对多生产者/多消费者
+// 也安全；无锁变体是后续（Phase 6）优化，可在同一接口后直接替换。
 
 #include <condition_variable>
 #include <cstddef>
@@ -25,85 +23,88 @@
 
 namespace radar {
 
-template <class T>
-class SpscRing {
+template <class T> class SpscRing {
 public:
-    explicit SpscRing(std::size_t capacity)
-        : cap_(capacity < 1 ? 1 : capacity), buf_(cap_) {}
+  explicit SpscRing(std::size_t capacity)
+      : cap_(capacity < 1 ? 1 : capacity), buf_(cap_) {}
 
-    // Blocking push with backpressure. Returns false iff the ring was closed.
-    bool push(T v) {
-        std::unique_lock<std::mutex> lk(m_);
-        not_full_.wait(lk, [&] { return count_ < cap_ || closed_; });
-        if (closed_) return false;
-        buf_[tail_] = std::move(v);
-        tail_ = (tail_ + 1) % cap_;
-        ++count_;
-        not_empty_.notify_one();
-        return true;
-    }
+  // 带背压的阻塞 push。仅当环已关闭时返回 false。
+  bool push(T v) {
+    std::unique_lock<std::mutex> lk(m_);
+    not_full_.wait(lk, [&] { return count_ < cap_ || closed_; });
+    if (closed_)
+      return false;
+    buf_[tail_] = std::move(v);
+    tail_ = (tail_ + 1) % cap_;
+    ++count_;
+    not_empty_.notify_one();
+    return true;
+  }
 
-    // Non-blocking push. Returns false when full or closed (never blocks, never drops).
-    bool try_push(T v) {
-        std::lock_guard<std::mutex> lk(m_);
-        if (closed_ || count_ >= cap_) return false;
-        buf_[tail_] = std::move(v);
-        tail_ = (tail_ + 1) % cap_;
-        ++count_;
-        not_empty_.notify_one();
-        return true;
-    }
+  // 非阻塞 push。满或已关闭时返回 false（永不阻塞、永不丢数据）。
+  bool try_push(T v) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (closed_ || count_ >= cap_)
+      return false;
+    buf_[tail_] = std::move(v);
+    tail_ = (tail_ + 1) % cap_;
+    ++count_;
+    not_empty_.notify_one();
+    return true;
+  }
 
-    // Blocking pop. Returns false only when the ring is closed AND drained.
-    bool pop(T& out) {
-        std::unique_lock<std::mutex> lk(m_);
-        not_empty_.wait(lk, [&] { return count_ > 0 || closed_; });
-        if (count_ == 0) return false; // closed & drained
-        out = std::move(buf_[head_]);
-        head_ = (head_ + 1) % cap_;
-        --count_;
-        not_full_.notify_one();
-        return true;
-    }
+  // 阻塞 pop。仅当环已关闭且已排空时返回 false。
+  bool pop(T &out) {
+    std::unique_lock<std::mutex> lk(m_);
+    not_empty_.wait(lk, [&] { return count_ > 0 || closed_; });
+    if (count_ == 0)
+      return false; // 已关闭且已排空
+    out = std::move(buf_[head_]);
+    head_ = (head_ + 1) % cap_;
+    --count_;
+    not_full_.notify_one();
+    return true;
+  }
 
-    // Non-blocking pop. Returns false when empty.
-    bool try_pop(T& out) {
-        std::lock_guard<std::mutex> lk(m_);
-        if (count_ == 0) return false;
-        out = std::move(buf_[head_]);
-        head_ = (head_ + 1) % cap_;
-        --count_;
-        not_full_.notify_one();
-        return true;
-    }
+  // 非阻塞 pop。空时返回 false。
+  bool try_pop(T &out) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (count_ == 0)
+      return false;
+    out = std::move(buf_[head_]);
+    head_ = (head_ + 1) % cap_;
+    --count_;
+    not_full_.notify_one();
+    return true;
+  }
 
-    void close() {
-        {
-            std::lock_guard<std::mutex> lk(m_);
-            closed_ = true;
-        }
-        not_full_.notify_all();
-        not_empty_.notify_all();
+  void close() {
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      closed_ = true;
     }
+    not_full_.notify_all();
+    not_empty_.notify_all();
+  }
 
-    std::size_t size() const {
-        std::lock_guard<std::mutex> lk(m_);
-        return count_;
-    }
-    std::size_t capacity() const noexcept { return cap_; }
-    bool closed() const {
-        std::lock_guard<std::mutex> lk(m_);
-        return closed_;
-    }
+  std::size_t size() const {
+    std::lock_guard<std::mutex> lk(m_);
+    return count_;
+  }
+  std::size_t capacity() const noexcept { return cap_; }
+  bool closed() const {
+    std::lock_guard<std::mutex> lk(m_);
+    return closed_;
+  }
 
 private:
-    mutable std::mutex m_;
-    std::condition_variable not_full_;
-    std::condition_variable not_empty_;
-    std::size_t cap_;
-    std::vector<T> buf_;
-    std::size_t head_ = 0, tail_ = 0, count_ = 0;
-    bool closed_ = false;
+  mutable std::mutex m_;
+  std::condition_variable not_full_;
+  std::condition_variable not_empty_;
+  std::size_t cap_;
+  std::vector<T> buf_;
+  std::size_t head_ = 0, tail_ = 0, count_ = 0;
+  bool closed_ = false;
 };
 
 } // namespace radar

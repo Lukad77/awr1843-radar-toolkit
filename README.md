@@ -4,7 +4,7 @@
 
 本项目是一款针对德州仪器（TI）AWR1843毫米波雷达与DCA1000数据采集卡的开源工具，用于实现雷达原始数据的实时采集、解析、处理与存储。支持离线数据解析与转换，可将二进制雷达数据转换为CSV格式便于分析，并提供灵活的参数配置与日志记录功能。
 
-项目近期完成了核心数据处理流水线的**架构重构**，从原有的ad-hoc实现迁移到全新的**无丢失、顺序保持**的实时处理架构，在保持向后兼容的同时，为后续扩展（FFT/CFAR/NN推理/WebSocket实时显示）奠定了坚实基础。
+项目近期完成了核心数据处理流水线的**架构重构**，从原有的ad-hoc实现迁移到全新的**无丢失、顺序保持**的实时处理架构，并在此基础上交付了 Phase 4 **DSP 算子层**（Range/Doppler/Angle FFT、CA-CFAR、MTI 杂波抑制、相位解缠），全部以 `IStage` 插件形式接入、零外部依赖，并用真实数据集完成了端到端验证。
 
 ## 功能特点
 
@@ -26,7 +26,18 @@
 - **保序管道执行**：`Pipeline` 单工作线程FIFO消费，输出顺序==提交顺序，无需重排序
 - **连续内存解析**：`ParseStage` 替代传统 `DataParser`，写入单一连续分配，无内部互斥锁
 - **接口驱动可扩展**：`IFrameSource/IStage/IResultSink/IInferenceEngine` 接口支持依赖倒置，新增处理阶段仅需实现 `IStage`
-- **自动化测试**：3个测试套件、10169条断言、100%通过，全部无硬件依赖可在CI运行
+- **自动化测试**：4个测试套件、11151条断言、100%通过，全部无硬件依赖可在CI运行
+
+### DSP 算子层（Phase 4，src/dsp/）
+
+全部以 `IStage` 插件形式串接到 `Pipeline`，零外部依赖（自研 radix-2 FFT），单帧 DSP 全链 < 2 ms（M 系列单核，30fps 预算余量充足）：
+
+- **Range FFT**：DC 去除 + Hann 窗 + 零填充到 2 的幂，沿连续内存采样轴原位变换
+- **Doppler FFT**：跨 chirp 慢时间维 FFT + fftshift（零多普勒居中）+ 4Rx 非相干积累生成 RD 功率图
+- **MTI 杂波抑制**（ClutterRemovalStage）：跨帧 EMA 杂波图减除，静止杂波检出降低 ~25%，运动目标无损保留
+- **CA-CFAR**：沿距离维 1D 单元平均恒虚警检测，边缘截断窗保持设计 Pfa，局部峰校验去重
+- **Angle FFT**：逐检测虚拟阵列快拍零填充 FFT，λ/2 ULA 角度换算（1Tx 支持，TDM-MIMO 留接缝）
+- **相位解缠**（PhaseUnwrapStage，⚠️ 实验性）：慢时间相位跟踪与解缠绕，含峰值跟随/相位桥接/Kasa 圆拟合 DC 补偿与 trackAmp 质量位；**真实数据的相位提取正确性尚存疑问，仅供研究，见"已知问题"章节**
 
 ## 系统架构
 
@@ -65,10 +76,19 @@ graph TB
 
 ### 分层架构图
 
-新架构 `src/` 树采用 core / transport / pipeline 三层划分，依赖单向向下，上层仅依赖下层接口：
+新架构 `src/` 树采用 core / transport / pipeline / dsp 四层划分，依赖单向向下，上层仅依赖下层接口：
 
 ```mermaid
 graph TB
+    subgraph DSP["dsp/ 算子层（Phase 4）"]
+        RF["RangeFftStage"]
+        DF["DopplerFftStage"]
+        CR["ClutterRemovalStage<br/>MTI"]
+        CF["CfarStage<br/>CA-CFAR"]
+        AF["AngleFftStage"]
+        PU["PhaseUnwrapStage<br/>⚠️实验性"]
+        FFT["FftPlan<br/>自研radix-2"]
+    end
     subgraph PIPELINE["pipeline/ 管道层"]
         PL["Pipeline<br/>保序无损执行器"]
         PS["ParseStage<br/>I/Q解交织"]
@@ -86,6 +106,9 @@ graph TB
         SN["SeqNum<br/>回绕安全序号"]
     end
 
+    RF & DF & CR & CF & AF & PU --> IF
+    RF & DF --> FFT
+    RF & DF --> BP
     PL --> SR
     PL --> IF
     PS --> RC
@@ -124,6 +147,24 @@ graph TB
 |------|------|------|
 | **Pipeline** | `src/pipeline/Pipeline.{h,cpp}` | 顺序保持、无丢失的管道执行器；单工作线程按FIFO顺序弹出帧，依次运行各 `IStage`，扇出到各 `IResultSink`；`submit()` 满则阻塞（背压），`stop()` 优雅排空 |
 | **ParseStage** | `src/pipeline/ParseStage.{h,cpp}` | 替代DataParser的管道阶段；将原始DCA1000 int16 I/Q字节解交织为连续FrameBuffer；保持与旧DataParser相同的字节布局，输出匹配旧的bin→CSV黄金标准；无内部mutex，可选BufferPool复用 |
+
+### 算子层（src/dsp/，Phase 4）
+
+算子链推荐顺序（见 `src/tools/radar_dsp_demo.cpp`）：
+`Parse → RangeFFT → PhaseUnwrap → ClutterRemoval → DopplerFFT → CA-CFAR → AngleFFT`
+（PhaseUnwrap 必须在 ClutterRemoval 之前：相位需要未滤波的 rangeCube，EMA 减除后的残差相位不再满足 φ=4πd/λ）
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| **FftPlan** | `src/dsp/Fft.{h,cpp}` | 自研迭代 radix-2 FFT（零外部依赖）；构造期预计算旋转因子/位反转表，`forward()` 零分配；预留替换 pffft/FFTW 的接缝 |
+| **RangeFftStage** | `src/dsp/RangeFftStage.{h,cpp}` | parsed → rangeCube `[chirp][rx][rangeBin]`；DC去除 + Hann窗 + 零填充，沿连续内存行原位FFT，输出池化 |
+| **DopplerFftStage** | `src/dsp/DopplerFftStage.{h,cpp}` | rangeCube → dopplerCube（fftshift零多普勒居中）+ rdMap（线性功率，4Rx非相干积累，供CFAR；显示时再转dB） |
+| **ClutterRemovalStage** | `src/dsp/ClutterRemovalStage.{h,cpp}` | MTI：按(rx,bin)维护chirp均值的跨帧EMA杂波图并原位减除；静止杂波收敛消失，多普勒旋转目标无损通过 |
+| **CfarStage** | `src/dsp/CfarStage.{h,cpp}` | 1D CA-CFAR（逐多普勒行沿距离维）；α=T(pfa^(-1/T)-1) 按实际训练单元数计算，边缘截断保持Pfa；产出 Detection（rangeBin/dopplerBin/rangeM/velocityMps/snrDb） |
+| **AngleFftStage** | `src/dsp/AngleFftStage.{h,cpp}` | 逐检测从 dopplerCube 提取虚拟阵列快拍，零填充FFT，sinθ=2k/N（λ/2 ULA）；仅 1Tx，TDM-MIMO 需多普勒相位补偿（留接缝） |
+| **PhaseUnwrapStage** | `src/dsp/PhaseUnwrapStage.{h,cpp}` | ⚠️ **实验性**：慢时间相位跟踪/解缠（峰值跟随+迟滞、换bin相位桥接、Kasa圆拟合DC补偿、trackBin/trackAmp质量位）；真实数据相位提取正确性尚在复核 |
+| **PhaseCsvSink** | `src/dsp/PhaseCsvSink.h` | IResultSink：逐帧输出 `frameSeq,相位,位移,trackBin,trackAmp` CSV |
+| **Detection/CfarParams** | `src/dsp/Detection.h` | 检测记录与 CA-CFAR 参数（guard/training/pfa/maxDetections） |
 
 ### 实时处理流水线架构图
 
@@ -195,15 +236,17 @@ flowchart LR
 
 ### 构建目标说明
 
-CMake 定义了五个独立的可执行目标：
+CMake 定义了七个独立的可执行目标：
 
 | 目标 | 用途 | 硬件依赖 |
 |------|------|----------|
 | `test_udp` | 网络采集链路测试（UDP接收→seqNum重组→DataParser解析） | 无（配合Python回放泵） |
-| `radar_full` | 完整程序（含串口链与DCA1000命令通道） | 需要 |
+| `radar_full` | 完整程序（含串口链与DCA1000命令通道）；离线分支支持命令行指定 bin 文件逐帧解析 | 实时模式需要；离线解析无 |
 | `radar_core_tests` | 新架构基础组件单测（SeqNum/SpscRing/FrameBuffer/BufferPool/RadarConfig） | 无 |
 | `radar_pipeline_tests` | 流水线骨架单测（ParseStage单/全Rx + Pipeline保序无损） | 无 |
 | `radar_spool_tests` | 两级无损FrameSpool单测（RAM→磁盘溢写FIFO保序） | 无 |
+| `radar_dsp_tests` | DSP算子单测（FFT对拍朴素DFT、Range/Doppler峰值定位、CFAR检测/虚警、Angle导向矢量、MTI、相位解缠、全链过Pipeline回压保序） | 无 |
+| `radar_dsp_demo` | 真实数据集端到端 DSP 链 demo（逐 stage 耗时/检测摘要/相位 CSV） | 无 |
 
 ## 使用说明
 
@@ -227,22 +270,42 @@ CMake 定义了五个独立的可执行目标：
 
 ### 离线数据解析模式（默认模式）
 
-1. 将需要解析的二进制数据文件路径修改至主程序：
-   ```cpp
-   std::ifstream inputFile("D:\\radar_dataset\\1105\\坐姿轻微晃动.bin", std::ios::binary);
-   ```
-2. 确保主程序中注释为`#if 1`的`main`函数为启用状态（默认即为此模式）
-3. 编译并运行：`cmake --build build -j && ./build/radar_full`
-4. 解析后的数据将保存为CSV文件
-5. 程序同时支持解析全天线数据并输出解析信息
+`radar_full` 离线分支已改为命令行参数驱动（不再硬编码路径）：
+
+```bash
+./build/radar_full <adc_raw.bin> [maxFrames] [out.csv]
+#   maxFrames: 最多解析帧数（0 = 全部）
+#   out.csv  : 可选，导出第 1 帧单 Rx 数据为 CSV
+```
+
+逐帧解析并统计成功/失败帧数与平均样本幅值（数据健全性指标）。已用 500MB 真实数据集（2000 帧 × 262144 B，4Rx×64chirps×256samples）验证：2000/2000 帧全部解析成功。
 
 ### 网络链路测试模式（无硬件）
 
-配合 Python 回放泵脚本，将本地 `.bin` 文件按帧重放至 UDP 端口：
+配合仓库根目录的 Python 回放泵 `dca1000_replay_pump.py`（按 DCA1000 包格式：4B seqNum 从 1 起 + 6B byteCnt + 1456B payload），将本地 `.bin` 文件重放至 UDP 端口：
+
 ```bash
-./build/test_udp <bind_ip> <bind_port> <bytes_per_frame>
+# 终端 1（注意 bytes_per_frame 必须与数据集匹配，如 262144）
+./build/test_udp 0.0.0.0 4098 262144
+
+# 终端 2
+ python3 dca1000_replay_pump.py --bin <adc_raw.bin> --host 127.0.0.1 --port 4098 \
+         --frame-bytes 262144 --fps 30 --max-frames 300
 ```
+
 默认监听 `0.0.0.0:4098`，开启 seqNum 排序重组，Ctrl-C 优雅退出并输出统计信息。
+
+> ⚠️ 已知限制：遗留链路 `GetFramesFromQueue(frameNum=1)` 存在**机制性隔帧丢失**（帧尾包含下一帧开头字节被丢弃，重同步只能对齐到再下一帧），实测吞吐恒为发送帧率的 ~50%（与速率无关，0 解析失败/0 接收错误）。新架构接入真实 UDP 源（Dca1000UdpSource）时将修复此问题。
+
+### DSP 端到端 demo（无硬件）
+
+```bash
+./build/radar_dsp_demo <adc_raw.bin> [maxFrames] [phase.csv]
+```
+
+读取录制的 ADC bin，逐帧跑完整算子链，输出：逐 stage 耗时、检测摘要（距离/速度/角度/SNR）、相位与位移 CSV（含 trackBin/trackAmp 质量列）。真实数据集实测：2000 帧 invalid=0，单帧 DSP 全链 < 2 ms。
+
+配套诊断脚本：`diagnose_phase.py`（直接读 bin 做相位机理诊断；`--plot` 生成相位曲线对比图，需 numpy/matplotlib）。
 
 ## 配置文件说明
 
@@ -294,9 +357,27 @@ CMake 定义了五个独立的可执行目标：
 | `src/transport/FrameSpool.h/.cpp` | 两级无损FIFO（RAM环+磁盘溢写），确保零丢包 |
 | `src/pipeline/Pipeline.h/.cpp` | 保序无损管道执行器，单工作线程FIFO消费 |
 | `src/pipeline/ParseStage.h/.cpp` | I/Q解交织管道阶段，替代DataParser，连续内存无mutex |
+| `src/dsp/Fft.h/.cpp` | 自研 radix-2 FFT（FftPlan/fftshift/Hann窗），零外部依赖 |
+| `src/dsp/RangeFftStage.h/.cpp` | 距离FFT算子（DC去除+加窗+零填充） |
+| `src/dsp/DopplerFftStage.h/.cpp` | 多普勒FFT算子 + RD功率图生成 |
+| `src/dsp/ClutterRemovalStage.h/.cpp` | MTI静态杂波抑制（跨帧EMA杂波图） |
+| `src/dsp/CfarStage.h/.cpp` | 1D CA-CFAR恒虚警检测算子 |
+| `src/dsp/AngleFftStage.h/.cpp` | 角度FFT算子（虚拟阵列快拍，1Tx） |
+| `src/dsp/PhaseUnwrapStage.h/.cpp` | ⚠️ 实验性：慢时间相位跟踪/解缠算子 |
+| `src/dsp/PhaseCsvSink.h` | 相位/位移/质量位 CSV 输出 Sink |
+| `src/dsp/Detection.h` | 检测记录与 CFAR 参数定义 |
+| `src/tools/radar_dsp_demo.cpp` | 真实数据集端到端 DSP 链 demo |
 | `src/tests/test_core.cpp` | 基础组件单测（SeqNum/SpscRing/FrameBuffer/BufferPool/RadarConfig） |
 | `src/tests/test_pipeline.cpp` | 流水线单测（ParseStage + Pipeline保序无损） |
 | `src/tests/test_spool.cpp` | FrameSpool单测（两级缓冲FIFO保序与溢写验证） |
+| `src/tests/test_dsp.cpp` | DSP算子单测（全合成信号对拍，含平台复现/修复对拍、全链集成） |
+
+### 辅助脚本（仓库根目录）
+
+| 文件 | 功能 |
+|------|------|
+| `dca1000_replay_pump.py` | DCA1000 UDP 回放泵：把离线 bin 按线上包格式重放，配合 test_udp 无硬件验证接收链路 |
+| `diagnose_phase.py` | 相位机理诊断（峰值 bin 轨迹/幅度塌陷分析）与修复前后对比绘图（`--plot`） |
 
 ## 数据格式说明
 
@@ -304,6 +385,19 @@ CMake 定义了五个独立的可执行目标：
 - **解析后数据**：以复数形式（I/Q分量）存储，每个采样点包含实部（I）和虚部（Q）
 - **CSV格式**：每行对应一个chirp数据，每个采样点以"I,Q"形式表示，采样点间以逗号分隔
 - **FrameBuffer布局**：行优先 `[chirp][rx][sample]`，索引计算 `idx = (chirp * numRx + rx) * numSamples + sample`
+
+## 已知问题与状态
+
+以下为当前已确认、尚未解决的问题（均有实测依据）：
+
+| 问题 | 状态 | 说明 |
+|------|------|------|
+| **PhaseUnwrapStage 相位提取正确性存疑** | ⚠️ 待解决 | 已实现峰值跟随/相位桥接/Kasa DC 补偿并通过合成信号单测，但**真实数据提取出的相位仍被认为存在问题**，结果仅供研究，不应用于生命体征结论。已知硬约束：跨帧采样间隙大（例 20fps 时 ≈ 40ms）导致容忍径向速度仅 ~24mm/s，快速体动必然欠采样（信息论层面丢失，需提高帧率或改采样策略）；trackAmp 质量位可标记不可靠段但不能修复它们 |
+| **遗留 UDP 链路隔帧丢失** | 已定位未修复 | `GetFramesFromQueue(frameNum=1)` 帧尾字节丢弃 + 重同步机制导致吞吐恒为 ~50%；修复路径是新架构 `Dca1000UdpSource`（未实现） |
+| **bin 0 近场泄漏残留** | 已定位未修复 | MTI 只能消零多普勒分量，天线耦合泄漏受相噪调制落在 ±1 doppler bin（实测 44.9dB）；需要 CFAR 增加 minRangeBin 距离门控 |
+| **TDM-MIMO（多Tx）不支持** | 设计留接缝 | AngleFftStage 仅 1Tx 直通；多 Tx 需多普勒相位补偿后虚拟阵列才相干 |
+| **IFrameSource 无实现** | 未开始 | 新架构尚未接入真实 UDP 源/文件回放源，DSP 链目前由 demo 手动驱动 |
+| **遗留源码 GBK 编码** | 未处理 | `awr1843_dca1000_read/` 部分文件编译时有编码警告，不影响功能 |
 
 ## 常见问题排查
 
@@ -348,8 +442,12 @@ graph TB
     PIPE["Pipeline 执行引擎<br/>保序·无损·背压"]
     subgraph STAGES["处理阶段 IStage"]
         ST1["ParseStage ✓"]
-        ST2["RangeFFTStage"]
-        ST3["CFARStage"]
+        ST2["RangeFftStage ✓"]
+        ST2b["DopplerFftStage ✓"]
+        ST2c["ClutterRemovalStage ✓"]
+        ST3["CfarStage ✓"]
+        ST3b["AngleFftStage ✓"]
+        ST3c["PhaseUnwrapStage ⚠️实验性"]
         ST4["InferenceStage"]
     end
     subgraph ENGINE["推理后端 IInferenceEngine"]
@@ -368,8 +466,12 @@ graph TB
     S3 --> PIPE
     PIPE --> ST1
     ST1 --> ST2
-    ST2 --> ST3
-    ST3 --> ST4
+    ST2 --> ST2b
+    ST2b --> ST2c
+    ST2c --> ST3
+    ST3 --> ST3b
+    ST3b --> ST3c
+    ST3c --> ST4
     ST4 -.调用.-> E1
     ST4 -.调用.-> E2
     ST4 -->|"扇出"| K1
@@ -476,10 +578,11 @@ public:
 
 | 阶段 | 目标 | 关键组件 |
 |------|------|------|
-| Phase 2 后续 | 接入真实 UDP 源与文件回放 | `Dca1000UdpSource`、`FileReplaySource` |
+| Phase 2 后续 | 接入真实 UDP 源与文件回放（修复遗留链路隔帧丢失） | `Dca1000UdpSource`、`FileReplaySource` |
 | Phase 0/1 收尾 | 配置外置、遗留源 UTF-8 转换、拆分 `AWR1843Controller` | `AppConfig`(JSON)、`Logger` 启用 |
-| Phase 3 后续 | WebSocket 实时显示旁路 | `WebSocketSink` + 前端 |
-| Phase 4/5 | DSP 处理与推理 | `RangeFFT`/`DopplerFFT`/`CFAR`（FFTW/pffft）、`InferenceStage`（ONNX Runtime） |
+| Phase 3 后续 | WebSocket 实时显示旁路（RD 图/检测点/波形） | `WebSocketSink` + 前端 |
+| Phase 4 收尾 | 相位提取正确性复核、CFAR 距离门控、检测聚类/跟踪 | `PhaseUnwrapStage` 复核、`minRangeBin`、DBSCAN/Kalman |
+| Phase 5 | NN 推理 | `InferenceStage`（ONNX Runtime） |
 | Phase 6 | 可观测性与优化 | `MetricsSink`（延迟/丢帧/队列水位/Spool 深度）、线程绑核、overload 告警 |
 
 > 更详细的扩展开发指南（含传统链路接入点、数据契约、锁约定）请参阅 [数据处理流程扩展开发指南](.qoder/repowiki/zh/content/数据处理流程扩展开发指南.md) 和 [架构演进文档](docs/ARCHITECTURE_EVOLUTION.md)。

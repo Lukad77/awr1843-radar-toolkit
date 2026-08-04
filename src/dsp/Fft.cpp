@@ -36,14 +36,14 @@ FftPlan::FftPlan(std::size_t n) : n_(n) {
 }
 
 void FftPlan::forward(std::complex<float> *x) const {
-  // Bit-reversal permutation, then iterative Cooley-Tukey DIT butterflies.
+  // 先做位反转置换，再做迭代 Cooley-Tukey DIT 蝶形运算。
   for (std::size_t i = 0; i < n_; ++i)
     if (i < rev_[i])
       std::swap(x[i], x[rev_[i]]);
 
   for (std::size_t len = 2; len <= n_; len <<= 1) {
     const std::size_t half = len >> 1;
-    const std::size_t step = n_ / len; // twiddle stride into tw_
+    const std::size_t step = n_ / len; // 在 tw_ 中的旋转因子步长
     for (std::size_t i = 0; i < n_; i += len) {
       for (std::size_t j = 0; j < half; ++j) {
         const std::complex<float> w = tw_[j * step];

@@ -18,12 +18,12 @@ bool AngleFftStage::process(FrameContext &ctx) {
   if (!ctx.valid || !ctx.dopplerCube || !ctx.detections)
     return true;
   if (!supported_)
-    return true; // TDM-MIMO: angles stay NaN (documented)
+    return true; // TDM-MIMO：角度保持 NaN（文档已说明）
 
   const FrameBuffer &cube = *ctx.dopplerCube;
   const FrameShape s = cube.shape(); // {doppler, rx, rangeBins}
   if (s.rx < 2)
-    return true; // single Rx: no aperture, angles stay NaN
+    return true; // 单 Rx：无孔径，角度保持 NaN
 
   const std::size_t N = plan_.size();
   const std::size_t half = N / 2;
@@ -40,7 +40,7 @@ bool AngleFftStage::process(FrameContext &ctx) {
                             static_cast<std::size_t>(det.rangeBin));
     plan_.forward(scratch_.data());
 
-    // Peak search in shifted order: shifted p maps to unshifted (p+N/2)%N.
+    // 按 fftshift 顺序搜峰：shifted 索引 p 对应 unshifted (p+N/2)%N。
     std::size_t bestP = half;
     float bestMag = -1.f;
     for (std::size_t p = 0; p < N; ++p) {

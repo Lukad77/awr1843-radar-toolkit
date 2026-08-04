@@ -3,89 +3,14 @@ schema_version: 1
 locale: zh-CN
 branch: feature/cross-platform
 nodes_managed: true
-exported_at: "2026-07-14T12:25:49Z"
+exported_at: "2026-07-30T01:58:10Z"
 modules:
     "":
-        dir_name: AWR1843-DCA1000 毫米波雷达数据采集与处理工具
-        title: AWR1843-DCA1000 毫米波雷达数据采集与处理工具
+        dir_name: AWR1843-DCA1000 毫米波雷达采集与处理工具（根模块）
+        title: AWR1843-DCA1000 毫米波雷达采集与处理工具（根模块）
         scope:
-            - README.md
             - CMakeLists.txt
-        source_files: []
-        children:
-            - data_parser
-            - dca1000_command
-            - logger
-            - realtime_pipeline
-            - serial_radar_control
-            - udp_receiver
-        depends_on: []
-        related_to: []
-    data_parser:
-        dir_name: 雷达原始数据解析器(DataParser)
-        title: 雷达原始数据解析器(DataParser)
-        scope:
-            - awr1843_dca1000_read/DataParser.h
-            - awr1843_dca1000_read/DataParser.cpp
-            - awr1843_dca1000_read/RadarParams.h
-        source_files: []
-        children: []
-        depends_on: []
-        related_to: []
-    dca1000_command:
-        dir_name: DCA1000 命令控制通道（UDPController）
-        title: DCA1000 命令控制通道（UDPController）
-        scope:
-            - awr1843_dca1000_read/UDPController.h
-            - awr1843_dca1000_read/UDPController.cpp
-            - awr1843_dca1000_read/net_compat.h
-        source_files: []
-        children: []
-        depends_on: []
-        related_to: []
-    logger:
-        dir_name: 多线程异步日志系统
-        title: 多线程异步日志系统
-        scope:
-            - awr1843_dca1000_read/Logger.h
-            - awr1843_dca1000_read/awr1843_dca1000_read.cpp
-            - awr1843_dca1000_read/test_udp_main.cpp
-        source_files: []
-        children: []
-        depends_on: []
-        related_to: []
-    realtime_pipeline:
-        dir_name: 实时数据流水线与雷达配置
-        title: 实时数据流水线与雷达配置
-        scope:
-            - awr1843_dca1000_read/RealTimeProcessor.h
-            - awr1843_dca1000_read/cf.json
-            - awr1843_dca1000_read/awr1843.cfg
-        source_files: []
-        children: []
-        depends_on: []
-        related_to: []
-    serial_radar_control:
-        dir_name: AWR1843 雷达串口控制与数据解析
-        title: AWR1843 雷达串口控制与数据解析
-        scope:
-            - awr1843_dca1000_read/SerialPort.h
-            - awr1843_dca1000_read/WzSerialportPlus.h
-            - awr1843_dca1000_read/WzSerialportPlus.cpp
-            - awr1843_dca1000_read/WzSerialPortAdapter.h
-            - awr1843_dca1000_read/AWR1843Controller.h
-            - awr1843_dca1000_read/AWR1843Controller.cpp
-        source_files: []
-        children: []
-        depends_on: []
-        related_to: []
-    udp_receiver:
-        dir_name: UDP 数据接收与帧重组（DCA1000 雷达点云流）
-        title: UDP 数据接收与帧重组（DCA1000 雷达点云流）
-        scope:
-            - awr1843_dca1000_read/UdpReceiver.h
-            - awr1843_dca1000_read/UdpReceiver.cpp
-            - awr1843_dca1000_read/unlock_queue.h
+            - README.md
         source_files: []
         children: []
         depends_on: []
