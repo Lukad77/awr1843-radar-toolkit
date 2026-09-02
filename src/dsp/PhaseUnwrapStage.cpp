@@ -147,53 +147,64 @@ bool PhaseUnwrapStage::process(FrameContext &ctx) {
   if (bin_ < 0 || static_cast<std::size_t>(bin_) >= s.samples)
     return true;
 
-  // ---- 质量指标 + DC 窗更新（原始值，未补偿）----
-  std::complex<double> frameMean{0.0, 0.0};
+  // ---- 质量指标：跟踪 bin 的原始 chirp 均幅度 ----
   double ampSum = 0.0;
-  for (std::size_t c = 0; c < s.chirps; ++c) {
-    const FrameBuffer::Sample v =
-        cube.at(c, rx, static_cast<std::size_t>(bin_));
-    frameMean += std::complex<double>(v.real(), v.imag());
-    ampSum += std::abs(v);
-  }
-  frameMean /= static_cast<double>(s.chirps);
+  for (std::size_t c = 0; c < s.chirps; ++c)
+    ampSum += std::abs(cube.at(c, rx, static_cast<std::size_t>(bin_)));
   const double trackAmp = ampSum / static_cast<double>(s.chirps);
 
+  // ---- 帧观测相量 z：chirp 相干平均 + 邻域幅度加权合并 ----
+  // 与 MATLAB 参考 extract_z_series_rx_v2 相同：先对帧内所有 chirp
+  // 求复数均值（√chirps 相位噪声增益），再对 [bin-span, bin+span]
+  // 按幅度加权相干合并——软化 bin 边界与切换处的不连续。
+  const int span = std::max(p_.neighborSpan, 0);
+  const int nbLo = std::max(0, bin_ - span);
+  const int nbHi = std::min(static_cast<int>(s.samples) - 1, bin_ + span);
+  std::complex<double> z{0.0, 0.0};
+  double wSum = 0.0;
+  for (int b = nbLo; b <= nbHi; ++b) {
+    std::complex<double> zb{0.0, 0.0};
+    for (std::size_t c = 0; c < s.chirps; ++c) {
+      const FrameBuffer::Sample v = cube.at(c, rx, static_cast<std::size_t>(b));
+      zb += std::complex<double>(v.real(), v.imag());
+    }
+    zb /= static_cast<double>(s.chirps);
+    const double w = std::abs(zb);
+    z += w * zb;
+    wSum += w;
+  }
+  if (wSum > 0.0)
+    z /= wSum;
+
   if (p_.dcCompensation) {
-    dcBuf_[dcHead_] = frameMean;
+    dcBuf_[dcHead_] = z; // 原始值入窗，未补偿
     dcHead_ = (dcHead_ + 1) % dcBuf_.size();
     dcCount_ = std::min(dcCount_ + 1, dcBuf_.size());
     fitDcCenter();
   }
   const bool compensate = p_.dcCompensation && dcValid_ && dcCount_ >= 16;
 
-  // ---- 跨 chirp 解缠（并经 prevRaw_ 跨帧连续）----
-  double sumUnwrapped = 0.0;
-  for (std::size_t c = 0; c < s.chirps; ++c) {
-    const FrameBuffer::Sample v =
-        cube.at(c, rx, static_cast<std::size_t>(bin_));
-    std::complex<double> z(v.real(), v.imag());
-    if (compensate)
-      z -= dcCenter_;
-    const double phi = std::atan2(z.imag(), z.real());
+  // ---- 帧级解缠：每帧一次 atan2，增量经 prevRaw_ 跨帧连续 ----
+  // （旧实现逐 chirp 解缠再取帧均值：64 步/帧的解缠链上任何一个
+  // 低 SNR chirp 注入的 ±2π 滑移都会永久污染累积器。）
+  if (compensate)
+    z -= dcCenter_;
+  const double phi = std::atan2(z.imag(), z.real());
 
-    if (!hasPrev_) {
-      unwrapped_ = phi;
-      hasPrev_ = true;
-    } else if (bridgePending_ && c == 0) {
-      // 换 bin 桥接：重新播种原始参考相位，增量记零 ——
-      // 切换观测点绝不能伪造相位阶跃。
-      bridgePending_ = false;
-    } else {
-      // 用 remainder() 把增量折回 (-pi, pi]：舍入到最近周期。
-      unwrapped_ += std::remainder(phi - prevRaw_, 2.0 * kPi);
-    }
-    prevRaw_ = phi;
-    sumUnwrapped += unwrapped_;
+  if (!hasPrev_) {
+    unwrapped_ = phi;
+    hasPrev_ = true;
+  } else if (bridgePending_) {
+    // 换 bin 桥接：重新播种原始参考相位，增量记零 ——
+    // 切换观测点绝不能伪造相位阶跃。
+  } else {
+    // 用 remainder() 把增量折回 (-pi, pi]：舍入到最近周期。
+    unwrapped_ += std::remainder(phi - prevRaw_, 2.0 * kPi);
   }
+  prevRaw_ = phi;
   bridgePending_ = false;
 
-  const double mean = sumUnwrapped / static_cast<double>(s.chirps);
+  const double mean = unwrapped_;
   if (!hasBase_) {
     baseMean_ = mean;
     hasBase_ = true;

@@ -491,6 +491,9 @@ static void test_phase_dc_compensation() {
 
 // 换 bin：经迟滞确认的切换不得伪造相位阶跃，
 // 即使新 bin 带有任意静态相位偏移。
+// （两个目标放在 neighborSpan=1 邻域之外的 bin 5/8：真实场景中
+// 相邻 bin 是同一目标的泄漏、共享相位调制，而独立相位的目标
+// 若相邻会先经邻域加权渗入合成相量——那是另一种物理情形。）
 static void test_phase_bridge_on_switch() {
   RadarConfig cfg;
   cfg.numRxAnt = 1;
@@ -512,22 +515,22 @@ static void test_phase_bridge_on_switch() {
   std::vector<float> out(M);
   for (int t = 0; t < M; ++t) {
     const double th = 0.05 * t;  // 公共的慢相位规律
-    const double th6 = th + 2.0; // bin6 带 +2 rad 偏移
+    const double th8 = th + 2.0; // bin8 带 +2 rad 偏移
     const float a5 = (t < 20) ? 10.f : 1.f;
-    const float a6 = (t < 20) ? 1.f : 10.f;
+    const float a8 = (t < 20) ? 1.f : 10.f;
     FrameContext ctx;
     ctx.rangeCube = binFrame(16, 5,
                              {static_cast<float>(a5 * std::cos(th)),
                               static_cast<float>(a5 * std::sin(th))},
-                             6,
-                             {static_cast<float>(a6 * std::cos(th6)),
-                              static_cast<float>(a6 * std::sin(th6))});
+                             8,
+                             {static_cast<float>(a8 * std::cos(th8)),
+                              static_cast<float>(a8 * std::sin(th8))});
     CHECK(stage.process(ctx));
     out[t] = ctx.unwrappedPhaseRad;
   }
 
   CHECK(stage.switchCount() == 1);
-  CHECK(stage.targetBin() == 6);
+  CHECK(stage.targetBin() == 8);
   // 任何帧间步长都不得接近 2 rad 偏移：桥接将其吸收
   // （切换帧贡献 ~0，其余帧 ~0.05）。
   bool noFakeJump = true;

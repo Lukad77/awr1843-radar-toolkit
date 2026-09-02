@@ -24,10 +24,15 @@
 //    一次性有界（<=pi）偏移，相对波形不受影响。真正静止的
 //    目标保持不补偿（零张角窗会被判为退化）。
 //
-// 解缠核心：逐 chirp 在 (chirp, rxIdx, bin) 处取 phi = atan2；增量
-// 用 remainder(d, 2*pi) 折回 (-pi, pi] 后累积（仅当相邻采样间
-// 位移 < lambda/4 时有效）。帧输出 = 本帧各 chirp 解缠相位的
-// 均值；位移 = lambda * delta_phi / (4*pi)。
+// 解缠核心（对齐 MATLAB 参考实现 extract_z_series_rx_v2 /
+// respiratory_main_F5_only.m 的处理顺序）：帧内所有 chirp 先做
+// 复数相干平均（√chirps 相位噪声增益），再对跟踪 bin 的
+// ±neighborSpan 邻域按幅度加权相干合并成单一帧观测相量 z；
+// DC 补偿后每帧仅做一次 atan2，增量用 remainder(d, 2*pi) 折回
+// (-pi, pi] 后跨帧累积（仅当帧间位移 < lambda/4 时有效）。
+// 位移 = lambda * delta_phi / (4*pi)。
+// （旧实现逐 chirp 取相位再解缠：低 SNR chirp 的 ±2π 滑移会
+// 永久污染累积器，真实数据上实测为主要伪影来源之一。）
 //
 // 质量字段（就地逐帧输出）：phaseTrackBin + phaseTrackAmp
 // （跟踪 bin 的原始 chirp 均幅度）。原始幅度塌陷标记了合成
@@ -49,6 +54,10 @@ struct PhaseUnwrapParams {
   float minRangeM = 0.3f;  // 距离门（cfg.rangeIdxToMeters > 0 时生效）
   float maxRangeM = 2.5f;
   int rxIdx = 0; // 相位跟踪使用的天线
+
+  // 帧观测相量的邻域合并半径：z = 跟踪 bin ±span 内 chirp 均值
+  // 相量的幅度加权和（0 = 仅跟踪 bin）。软化 bin 边界不连续。
+  int neighborSpan = 1;
 
   // 峰值跟随（仅 targetRangeBin < 0 时）。
   bool followPeak = true;
