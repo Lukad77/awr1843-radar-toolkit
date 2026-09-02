@@ -4,7 +4,7 @@
 
 本项目是一款针对德州仪器（TI）AWR1843毫米波雷达与DCA1000数据采集卡的开源工具，用于实现雷达原始数据的实时采集、解析、处理与存储。支持离线数据解析与转换，可将二进制雷达数据转换为CSV格式便于分析，并提供灵活的参数配置与日志记录功能。
 
-项目近期完成了核心数据处理流水线的**架构重构**，从原有的ad-hoc实现迁移到全新的**无丢失、顺序保持**的实时处理架构，并在此基础上交付了 Phase 4 **DSP 算子层**（Range/Doppler/Angle FFT、CA-CFAR、MTI 杂波抑制、相位解缠），全部以 `IStage` 插件形式接入、零外部依赖，并用真实数据集完成了端到端验证。
+项目近期完成了核心数据处理流水线的**架构重构**，从原有的ad-hoc实现迁移到全新的**无丢失、顺序保持**的实时处理架构，并在此基础上交付了 Phase 4 **DSP 算子层**（Range/Doppler/Angle FFT、CA-CFAR、MTI 杂波抑制、相位解缠），全部以 `IStage` 插件形式接入、零外部依赖，并用真实数据集完成了端到端验证。随后修复了相位提取链路的两个根因（I/Q 配对错误、逐 chirp 解缠），并交付可选的 **Web 实时显示旁路**（`radar_web_demo` 离线回放 + 浏览器实时图表）。
 
 ## 功能特点
 
@@ -26,7 +26,7 @@
 - **保序管道执行**：`Pipeline` 单工作线程FIFO消费，输出顺序==提交顺序，无需重排序
 - **连续内存解析**：`ParseStage` 替代传统 `DataParser`，写入单一连续分配，无内部互斥锁
 - **接口驱动可扩展**：`IFrameSource/IStage/IResultSink/IInferenceEngine` 接口支持依赖倒置，新增处理阶段仅需实现 `IStage`
-- **自动化测试**：4个测试套件、11151条断言、100%通过，全部无硬件依赖可在CI运行
+- **自动化测试**：5个测试套件、11173条断言、100%通过，全部无硬件依赖可在CI运行
 
 ### DSP 算子层（Phase 4，src/dsp/）
 
@@ -37,7 +37,7 @@
 - **MTI 杂波抑制**（ClutterRemovalStage）：跨帧 EMA 杂波图减除，静止杂波检出降低 ~25%，运动目标无损保留
 - **CA-CFAR**：沿距离维 1D 单元平均恒虚警检测，边缘截断窗保持设计 Pfa，局部峰校验去重
 - **Angle FFT**：逐检测虚拟阵列快拍零填充 FFT，λ/2 ULA 角度换算（1Tx 支持，TDM-MIMO 留接缝）
-- **相位解缠**（PhaseUnwrapStage，⚠️ 实验性）：慢时间相位跟踪与解缠绕，含峰值跟随/相位桥接/Kasa 圆拟合 DC 补偿与 trackAmp 质量位；**真实数据的相位提取正确性尚存疑问，仅供研究，见"已知问题"章节**
+- **相位解缠**（PhaseUnwrapStage）：慢时间相位跟踪与解缠；帧内 chirp 复数相干平均 + 跟踪 bin ±邻域幅度加权合并成帧观测相量（对齐 MATLAB 参考实现），含峰值跟随/相位桥接/Kasa 圆拟合 DC 补偿与 trackAmp 质量位；真实数据 2000 帧复核呼吸位移曲线 mm 级、物理合理（遗留项见"已知问题"章节）
 
 ## 系统架构
 
@@ -53,15 +53,15 @@ graph TB
     end
     subgraph HOST["上位机（Windows / Linux / macOS）"]
         subgraph CTRL["设备控制"]
-            SERIAL["串口通信<br/>WzSerialportPlus<br/>AWR1843Controller"]
-            UDPCTRL["UDP命令通道<br/>UDPController :4096"]
+            SERIAL["串口控制链<br/>CLI 配置命令<br/>（待接入）"]
+            UDPCTRL["UDP命令通道<br/>DCA1000 :4096"]
         end
         subgraph DATA["数据链路"]
-            UDPRECV["UDP数据接收<br/>UdpReceiver :4098<br/>seqNum帧重组"]
+            UDPRECV["UDP数据链路<br/>DCA1000 :4098<br/>seqNum帧重组"]
             PIPE["实时处理流水线<br/>Pipeline + ParseStage"]
         end
         STORE["数据存储<br/>bin / CSV"]
-        LOG["日志系统<br/>Logger"]
+        LOG["日志系统"]
     end
 
     SERIAL -->|"CLI配置命令 921600bps"| RADAR
@@ -76,7 +76,7 @@ graph TB
 
 ### 分层架构图
 
-新架构 `src/` 树采用 core / transport / pipeline / dsp 四层划分，依赖单向向下，上层仅依赖下层接口：
+新架构 `src/` 树采用 core / transport / pipeline / dsp 四层划分（外加 `web/` 实时显示旁路与 `tools/` 端到端 demo），依赖单向向下，上层仅依赖下层接口：
 
 ```mermaid
 graph TB
@@ -86,7 +86,7 @@ graph TB
         CR["ClutterRemovalStage<br/>MTI"]
         CF["CfarStage<br/>CA-CFAR"]
         AF["AngleFftStage"]
-        PU["PhaseUnwrapStage<br/>⚠️实验性"]
+        PU["PhaseUnwrapStage"]
         FFT["FftPlan<br/>自研radix-2"]
     end
     subgraph PIPELINE["pipeline/ 管道层"]
@@ -146,7 +146,7 @@ graph TB
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | **Pipeline** | `src/pipeline/Pipeline.{h,cpp}` | 顺序保持、无丢失的管道执行器；单工作线程按FIFO顺序弹出帧，依次运行各 `IStage`，扇出到各 `IResultSink`；`submit()` 满则阻塞（背压），`stop()` 优雅排空 |
-| **ParseStage** | `src/pipeline/ParseStage.{h,cpp}` | 替代DataParser的管道阶段；将原始DCA1000 int16 I/Q字节解交织为连续FrameBuffer；保持与旧DataParser相同的字节布局，输出匹配旧的bin→CSV黄金标准；无内部mutex，可选BufferPool复用 |
+| **ParseStage** | `src/pipeline/ParseStage.{h,cpp}` | 替代DataParser的管道阶段；将原始DCA1000 int16字节解交织为连续FrameBuffer；线上每4个int16为 `[x0 x1 y0 y1]`（前两虚部、后两实部），按 `(y, x)` 组复数，与MATLAB参考实现一致（旧DataParser的I/Q配对会使目标镜像到负频率bin，已修正）；无内部mutex，可选BufferPool复用 |
 
 ### 算子层（src/dsp/，Phase 4）
 
@@ -162,7 +162,7 @@ graph TB
 | **ClutterRemovalStage** | `src/dsp/ClutterRemovalStage.{h,cpp}` | MTI：按(rx,bin)维护chirp均值的跨帧EMA杂波图并原位减除；静止杂波收敛消失，多普勒旋转目标无损通过 |
 | **CfarStage** | `src/dsp/CfarStage.{h,cpp}` | 1D CA-CFAR（逐多普勒行沿距离维）；α=T(pfa^(-1/T)-1) 按实际训练单元数计算，边缘截断保持Pfa；产出 Detection（rangeBin/dopplerBin/rangeM/velocityMps/snrDb） |
 | **AngleFftStage** | `src/dsp/AngleFftStage.{h,cpp}` | 逐检测从 dopplerCube 提取虚拟阵列快拍，零填充FFT，sinθ=2k/N（λ/2 ULA）；仅 1Tx，TDM-MIMO 需多普勒相位补偿（留接缝） |
-| **PhaseUnwrapStage** | `src/dsp/PhaseUnwrapStage.{h,cpp}` | ⚠️ **实验性**：慢时间相位跟踪/解缠（峰值跟随+迟滞、换bin相位桥接、Kasa圆拟合DC补偿、trackBin/trackAmp质量位）；真实数据相位提取正确性尚在复核 |
+| **PhaseUnwrapStage** | `src/dsp/PhaseUnwrapStage.{h,cpp}` | 慢时间相位跟踪/解缠：帧内chirp相干平均 + 跟踪bin ±neighborSpan幅度加权合并成帧观测相量（对齐MATLAB `extract_z_series_rx_v2`），峰值跟随+迟滞、换bin相位桥接、Kasa圆拟合DC补偿、phaseTrackBin/phaseTrackAmp质量位 |
 | **PhaseCsvSink** | `src/dsp/PhaseCsvSink.h` | IResultSink：逐帧输出 `frameSeq,相位,位移,trackBin,trackAmp` CSV |
 | **Detection/CfarParams** | `src/dsp/Detection.h` | 检测记录与 CA-CFAR 参数（guard/training/pfa/maxDetections） |
 
@@ -173,7 +173,7 @@ graph TB
 ```mermaid
 flowchart LR
     NET["DCA1000<br/>UDP:4098"]
-    RECV["UdpReceiver<br/>帧重组(seqNum)"]
+    RECV["DCA1000 UDP 源<br/>帧重组(seqNum)<br/>（待接入）"]
     SPOOL["FrameSpool<br/>RAM环 + 磁盘溢写<br/>两级无损FIFO"]
     RING["SpscRing<br/>有界阻塞队列<br/>满则回压"]
     WORKER["Pipeline worker<br/>单线程FIFO保序"]
@@ -207,7 +207,7 @@ flowchart LR
 - **操作系统**：Windows / Linux / macOS（跨平台支持，已通过跨平台改造）
 - **编译环境**：C++17及以上标准的编译器（如MSVC、GCC、Clang）
 - **构建系统**：CMake 3.15+
-- **依赖库**：无第三方库依赖（仅使用C++标准库 + 系统线程库）
+- **依赖库**：核心零第三方依赖（仅C++标准库 + 系统线程库）；可选 Web target 使用仓库自带的 vendored IXWebSocket（`third_party/ixwebsocket`，USE_TLS/USE_ZLIB 关闭，免联网安装）
 - **平台特定**：
   - Windows：自动链接 ws2_32（Winsock2）
   - Linux/macOS：需要 pthread（通过 CMake `find_package(Threads)` 自动处理）
@@ -236,12 +236,10 @@ flowchart LR
 
 ### 构建目标说明
 
-CMake 定义了七个独立的可执行目标：
+CMake 定义了七个独立的可执行目标（`radar_web_*` 可选：`-DRADAR_BUILD_WEB=OFF` 或删除 `third_party/ixwebsocket` 目录即自动跳过）：
 
 | 目标 | 用途 | 硬件依赖 |
 |------|------|----------|
-| `test_udp` | 网络采集链路测试（UDP接收→seqNum重组→DataParser解析） | 无（配合Python回放泵） |
-| `radar_full` | 完整程序（含串口链与DCA1000命令通道）；离线分支支持命令行指定 bin 文件逐帧解析 | 实时模式需要；离线解析无 |
 | `radar_core_tests` | 新架构基础组件单测（SeqNum/SpscRing/FrameBuffer/BufferPool/RadarConfig） | 无 |
 | `radar_pipeline_tests` | 流水线骨架单测（ParseStage单/全Rx + Pipeline保序无损） | 无 |
 | `radar_spool_tests` | 两级无损FrameSpool单测（RAM→磁盘溢写FIFO保序） | 无 |
@@ -252,52 +250,7 @@ CMake 定义了七个独立的可执行目标：
 
 ## 使用说明
 
-### 实时数据采集模式
-
-1. 确保AWR1843与DCA1000正确连接并供电
-2. 配置网络：将PC与DCA1000连接至同一局域网（默认DCA1000 IP为192.168.33.30）
-3. 修改主程序中注释为`#if 0`的`main`函数为启用状态（将`#if 0`改为`#if 1`，同时将原`#if 1`改为`#if 0`）
-4. 重新编译：`cmake --build build -j`
-5. 根据实际硬件配置修改雷达参数：
-   ```cpp
-   Radar::RadarParams params;
-   params.numADCBits = 16;         // ADC位数
-   params.numADCSamples = 256;     // 每chirp的ADC采样数
-   params.numChirpsEachFrame = 64; // 每帧的chirp数
-   params.numRX = 4;               // 接收天线数量
-   params.rxIdx = 0;               // 目标接收天线索引
-   ```
-6. 运行程序，数据将保存至指定路径（默认：`F:\\RadarData\\adc_<timestamp>.bin`）
-7. 按Enter键停止采集
-
-### 离线数据解析模式（默认模式）
-
-`radar_full` 离线分支已改为命令行参数驱动（不再硬编码路径）：
-
-```bash
-./build/radar_full <adc_raw.bin> [maxFrames] [out.csv]
-#   maxFrames: 最多解析帧数（0 = 全部）
-#   out.csv  : 可选，导出第 1 帧单 Rx 数据为 CSV
-```
-
-逐帧解析并统计成功/失败帧数与平均样本幅值（数据健全性指标）。已用 500MB 真实数据集（2000 帧 × 262144 B，4Rx×64chirps×256samples）验证：2000/2000 帧全部解析成功。
-
-### 网络链路测试模式（无硬件）
-
-配合仓库根目录的 Python 回放泵 `dca1000_replay_pump.py`（按 DCA1000 包格式：4B seqNum 从 1 起 + 6B byteCnt + 1456B payload），将本地 `.bin` 文件重放至 UDP 端口：
-
-```bash
-# 终端 1（注意 bytes_per_frame 必须与数据集匹配，如 262144）
-./build/test_udp 0.0.0.0 4098 262144
-
-# 终端 2
- python3 dca1000_replay_pump.py --bin <adc_raw.bin> --host 127.0.0.1 --port 4098 \
-         --frame-bytes 262144 --fps 30 --max-frames 300
-```
-
-默认监听 `0.0.0.0:4098`，开启 seqNum 排序重组，Ctrl-C 优雅退出并输出统计信息。
-
-> ⚠️ 已知限制：遗留链路 `GetFramesFromQueue(frameNum=1)` 存在**机制性隔帧丢失**（帧尾包含下一帧开头字节被丢弃，重同步只能对齐到再下一帧），实测吞吐恒为发送帧率的 ~50%（与速率无关，0 解析失败/0 接收错误）。新架构接入真实 UDP 源（Dca1000UdpSource）时将修复此问题。
+> 实时硬件采集入口（`Dca1000UdpSource`）尚未接入（见[已知问题与状态](#已知问题与状态)），当前可用的运行形态均为**无硬件离线回放**：
 
 ### DSP 端到端 demo（无硬件）
 
@@ -339,7 +292,7 @@ CMake 定义了七个独立的可执行目标：
 
 ## 配置文件说明
 
-`cf.json`用于配置DCA1000工作参数：
+DCA1000 采集卡工作参数示例（`dataLoggingMode`/`lvdsMode` 等为设备侧配置，仅供参考）：
 ```json
 {
   "DCA1000Config": {
@@ -356,22 +309,6 @@ CMake 定义了七个独立的可执行目标：
 新架构中，`RadarConfig` 作为单一事实源管理所有雷达采集和处理参数，可通过 `derive()` 一次计算所有派生值（bytesPerFrame、numRangeBins、分辨率等），通过 `validate()` 校验配置一致性，避免多份配置漂移。
 
 ## 代码结构说明
-
-### 传统实时处理层（awr1843_dca1000_read/）
-
-| 文件名称 | 功能描述 |
-|----------|----------|
-| `awr1843_dca1000_read.cpp` | 主程序入口，包含实时采集（`#if 0`）与离线解析（`#if 1`）两种模式 |
-| `UDPController.h/.cpp` | DCA1000 UDP通信控制，实现命令发送与响应处理 |
-| `AWR1843Controller.h/.cpp` | AWR1843雷达控制，实现传感器启动与数据处理 |
-| `DataParser.h/.cpp` | 雷达数据解析器，支持单天线与全天线数据解析 |
-| `RealTimeProcessor.h` | 实时数据处理器，实现数据接收、缓存与存储 |
-| `UdpReceiver.h/.cpp` | UDP数据接收与帧重组，支持阻塞与队列两种模式 |
-| `Logger.h` | 日志系统，支持多级别日志输出与线程安全 |
-| `WzSerialportPlus.h/.cpp` | 跨平台串口通信实现（Win32 DCB/POSIX termios双实现） |
-| `net_compat.h` | 网络兼容层，统一Windows Winsock2与POSIX BSD socket差异 |
-| `test_udp_main.cpp` | 网络链路测试入口，无硬件依赖 |
-| `cf.json` | DCA1000配置文件 |
 
 ### 新架构核心组件层（src/）
 
@@ -397,16 +334,22 @@ CMake 定义了七个独立的可执行目标：
 | `src/dsp/PhaseCsvSink.h` | 相位/位移/质量位 CSV 输出 Sink |
 | `src/dsp/Detection.h` | 检测记录与 CFAR 参数定义 |
 | `src/tools/radar_dsp_demo.cpp` | 真实数据集端到端 DSP 链 demo |
+| `src/web/WireProtocol.h` | WebSocket 二进制 wire 协议（每帧一条消息编码 + 接入时 meta JSON 下发） |
+| `src/web/WsFrameSink.h/.cpp` | IResultSink：帧编码入队 + 专用发送线程广播，慢客户端丢帧计数、绝不阻塞 DSP worker |
+| `src/tools/radar_web_demo.cpp` | 离线回放 + WebSocket 实时推送 demo（真实 Pipeline 全链 + WsFrameSink，定时 submit 模拟实盘节拍） |
 | `src/tests/test_core.cpp` | 基础组件单测（SeqNum/SpscRing/FrameBuffer/BufferPool/RadarConfig） |
 | `src/tests/test_pipeline.cpp` | 流水线单测（ParseStage + Pipeline保序无损） |
 | `src/tests/test_spool.cpp` | FrameSpool单测（两级缓冲FIFO保序与溢写验证） |
 | `src/tests/test_dsp.cpp` | DSP算子单测（全合成信号对拍，含平台复现/修复对拍、全链集成） |
+| `src/tests/test_web.cpp` | Web wire 协议单测（编码布局回读对拍） |
+| `web/index.html` + `web/app.js` | 零构建工具链浏览器前端（uPlot 图表 + 呼吸 biquad 带通 / Goertzel 呼吸率） |
+| `third_party/ixwebsocket/` | vendored IXWebSocket 依赖（可选，Web target 使用，USE_TLS/USE_ZLIB 关闭） |
 
 ### 辅助脚本（仓库根目录）
 
 | 文件 | 功能 |
 |------|------|
-| `dca1000_replay_pump.py` | DCA1000 UDP 回放泵：把离线 bin 按线上包格式重放，配合 test_udp 无硬件验证接收链路 |
+| `dca1000_replay_pump.py` | DCA1000 UDP 回放泵：把离线 bin 按线上包格式重放至 UDP 端口（供未来 `Dca1000UdpSource` 联调与回放验证） |
 | `diagnose_phase.py` | 相位机理诊断（峰值 bin 轨迹/幅度塌陷分析）与修复前后对比绘图（`--plot`） |
 
 ## 数据格式说明
@@ -422,37 +365,27 @@ CMake 定义了七个独立的可执行目标：
 
 | 问题 | 状态 | 说明 |
 |------|------|------|
-| **PhaseUnwrapStage 相位提取正确性存疑** | ⚠️ 待解决 | 已实现峰值跟随/相位桥接/Kasa DC 补偿并通过合成信号单测，但**真实数据提取出的相位仍被认为存在问题**，结果仅供研究，不应用于生命体征结论。已知硬约束：跨帧采样间隙大（例 20fps 时 ≈ 40ms）导致容忍径向速度仅 ~24mm/s，快速体动必然欠采样（信息论层面丢失，需提高帧率或改采样策略）；trackAmp 质量位可标记不可靠段但不能修复它们 |
-| **遗留 UDP 链路隔帧丢失** | 已定位未修复 | `GetFramesFromQueue(frameNum=1)` 帧尾字节丢弃 + 重同步机制导致吞吐恒为 ~50%；修复路径是新架构 `Dca1000UdpSource`（未实现） |
+| **PhaseUnwrapStage 相位提取（已收敛）** | ✅ 已修复 | 根因：ParseStage I/Q 配对错误使目标能量落入镜像 bin（正/镜像幅度比 1:54），相位跟踪采到噪声裙边；已修正配对（对齐 MATLAB）并把解缠核心重构为 chirp 相干平均 + 邻域加权帧相量。真实数据 2000 帧复核：>1 rad 解缠跳变降至 0、位移曲线 mm 级物理合理。遗留：① 相位→位移换算用 `lambdaM = c/startFreq`（起始频率，与中心频率差 ~1%）；② 20fps 帧率下跨帧间隙 ≈40ms、快速体动欠采样（容忍径向速度 ~24mm/s，需提高帧率）；trackAmp 质量位可标记不可靠段但不能修复 |
 | **bin 0 近场泄漏残留** | 已定位未修复 | MTI 只能消零多普勒分量，天线耦合泄漏受相噪调制落在 ±1 doppler bin（实测 44.9dB）；需要 CFAR 增加 minRangeBin 距离门控 |
 | **TDM-MIMO（多Tx）不支持** | 设计留接缝 | AngleFftStage 仅 1Tx 直通；多 Tx 需多普勒相位补偿后虚拟阵列才相干 |
-| **IFrameSource 无实现** | 未开始 | 新架构尚未接入真实 UDP 源/文件回放源，DSP 链目前由 demo 手动驱动 |
-| **遗留源码 GBK 编码** | 未处理 | `awr1843_dca1000_read/` 部分文件编译时有编码警告，不影响功能 |
+| **IFrameSource 无实现** | 未开始 | 尚未实现 UDP/文件 `IFrameSource` 接口；`radar_dsp_demo`/`radar_web_demo` 均以手动循环 + 定时 `submit()` 驱动真实 Pipeline（后者按 `cfg.framePeriodicityMs` 模拟实盘节拍） |
 
 ## 常见问题排查
 
-### 传统组件问题
+### 组件问题
 
-1. **UDP连接失败**：检查网络配置是否正确，确保PC与DCA1000 IP在同一网段
-2. **串口无法打开**：确认串口名称正确，检查雷达是否正确供电，关闭占用串口的其他程序
-3. **数据解析错误**：检查`BYTES_PER_FRAME`定义是否与实际配置一致，确保输入文件完整
-4. **文件无法写入**：检查目标路径是否存在，确保程序有写入权限
-5. **数据不完整**：增加`FRAME_BATCH_SIZE`参数可减少写入频率，提高数据完整性
-
-### 新架构组件问题
-
-6. **RadarConfig配置校验失败**：检查 `RadarConfig::validate()` 返回的错误信息，确认 `bytesPerFrame` 计算是否正确，确保 `numAdcSamples` 为偶数且 `rxIdx` 在有效范围内
-7. **SpscRing队列阻塞**：监控 `size()` 和 `capacity()`，确认背压机制正常工作；若消费端处理过慢导致持续阻塞，考虑增大队列容量或优化下游处理速度
-8. **BufferPool对象泄漏**：监控 `free_count()`，确认对象回收正常；检查 `shared_ptr` 生命周期管理，避免悬垂引用导致对象无法归还
-9. **Pipeline处理延迟**：监控 `backlog()` 确认处理速度跟上生产速度；检查各 `IStage::process()` 返回值，识别被丢弃的帧
-10. **FrameSpool磁盘溢写**：监控 `diskPeak()` 确认是否发生溢出；若频繁溢写，考虑增大 `ramCapFrames` 或优化消费速度；检查磁盘写入权限和剩余空间
-11. **ParseStage尺寸不匹配**：检查 `expectedBytes()` 与实际帧大小是否一致；确认 `RadarConfig` 的 `numRxAnt`、`numChirpsPerFrame`、`numAdcSamples` 配置与实际雷达配置匹配
+1. **RadarConfig配置校验失败**：检查 `RadarConfig::validate()` 返回的错误信息，确认 `bytesPerFrame` 计算是否正确，确保 `numAdcSamples` 为偶数且 `rxIdx` 在有效范围内
+2. **SpscRing队列阻塞**：监控 `size()` 和 `capacity()`，确认背压机制正常工作；若消费端处理过慢导致持续阻塞，考虑增大队列容量或优化下游处理速度
+3. **BufferPool对象泄漏**：监控 `free_count()`，确认对象回收正常；检查 `shared_ptr` 生命周期管理，避免悬垂引用导致对象无法归还
+4. **Pipeline处理延迟**：监控 `backlog()` 确认处理速度跟上生产速度；检查各 `IStage::process()` 返回值，识别被丢弃的帧
+5. **FrameSpool磁盘溢写**：监控 `diskPeak()` 确认是否发生溢出；若频繁溢写，考虑增大 `ramCapFrames` 或优化消费速度；检查磁盘写入权限和剩余空间
+6. **ParseStage尺寸不匹配**：检查 `expectedBytes()` 与实际帧大小是否一致；确认 `RadarConfig` 的 `numRxAnt`、`numChirpsPerFrame`、`numAdcSamples` 配置与实际雷达配置匹配
 
 ### 构建问题
 
-12. **CMake找不到线程库**：Linux/macOS 确保安装了 pthread 开发包；Windows 上线程库为空实现，通常不会出现此问题
-13. **Windows下链接错误**：确认 CMakeLists.txt 中包含 `ws2_32` 链接（已在 CMake 中自动处理）
-14. **测试目标构建失败**：检查 `src/` 目录下相应组件是否正确编译，确认 C++17 标准已启用
+7. **CMake找不到线程库**：Linux/macOS 确保安装了 pthread 开发包；Windows 上线程库为空实现，通常不会出现此问题
+8. **Windows下链接错误**：确认 CMakeLists.txt 中包含 `ws2_32` 链接（已在 CMake 中自动处理）
+9. **测试目标构建失败**：检查 `src/` 目录下相应组件是否正确编译，确认 C++17 标准已启用
 
 ## 后续扩展开发指南
 
@@ -477,7 +410,7 @@ graph TB
         ST2c["ClutterRemovalStage ✓"]
         ST3["CfarStage ✓"]
         ST3b["AngleFftStage ✓"]
-        ST3c["PhaseUnwrapStage ⚠️实验性"]
+        ST3c["PhaseUnwrapStage"]
         ST4["InferenceStage"]
     end
     subgraph ENGINE["推理后端 IInferenceEngine"]
@@ -608,14 +541,14 @@ public:
 
 | 阶段 | 目标 | 关键组件 |
 |------|------|------|
-| Phase 2 后续 | 接入真实 UDP 源与文件回放（修复遗留链路隔帧丢失） | `Dca1000UdpSource`、`FileReplaySource` |
-| Phase 0/1 收尾 | 配置外置、遗留源 UTF-8 转换、拆分 `AWR1843Controller` | `AppConfig`(JSON)、`Logger` 启用 |
+| Phase 2 后续 | 接入真实 UDP 源与文件回放 | `Dca1000UdpSource`、`FileReplaySource` |
+| Phase 0/1 收尾 | 配置外置（JSON）与日志系统接入 | `AppConfig`(JSON)、`Logger` |
 | Phase 3 后续 | WebSocket 实时显示旁路（RD 图/检测点/波形） | `WebSocketSink` + 前端 |
-| Phase 4 收尾 | 相位提取正确性复核、CFAR 距离门控、检测聚类/跟踪 | `PhaseUnwrapStage` 复核、`minRangeBin`、DBSCAN/Kalman |
+| Phase 4 收尾 | CFAR 距离门控、检测聚类/跟踪 | `minRangeBin`、DBSCAN/Kalman |
 | Phase 5 | NN 推理 | `InferenceStage`（ONNX Runtime） |
 | Phase 6 | 可观测性与优化 | `MetricsSink`（延迟/丢帧/队列水位/Spool 深度）、线程绑核、overload 告警 |
 
-> 更详细的扩展开发指南（含传统链路接入点、数据契约、锁约定）请参阅 [数据处理流程扩展开发指南](.qoder/repowiki/zh/content/数据处理流程扩展开发指南.md) 和 [架构演进文档](docs/ARCHITECTURE_EVOLUTION.md)。
+> 更详细的扩展开发指南（含传统链路接入点、数据契约、锁约定）请参阅 [数据处理流程扩展开发指南](.qoder/repowiki/zh/content/数据处理流程扩展开发指南.md)、[实时显示扩展开发指南](.qoder/repowiki/zh/content/实时显示扩展开发指南.md) 与 [架构演进文档](docs/ARCHITECTURE_EVOLUTION.md)。
 
 ## 许可证
 
