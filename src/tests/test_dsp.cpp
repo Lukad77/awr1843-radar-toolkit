@@ -646,7 +646,8 @@ static void test_clutter_removal() {
 // ---------------------------------------------------------------------------
 
 // ParseStage 线上格式的逆运算：每 (chirp, rx) 的 int16 块，偶数 s：
-// blk[2s]=I_s、blk[2s+1]=I_{s+1}、blk[2s+2]=Q_s、blk[2s+3]=Q_{s+1}。
+// blk[2s]=Q_s、blk[2s+1]=Q_{s+1}、blk[2s+2]=I_s、blk[2s+3]=I_{s+1}
+// （前两个虚部、后两个实部，见 ParseStage::parse 的约定说明）。
 static std::shared_ptr<std::vector<std::uint8_t>>
 makeRawFrame(const RadarConfig &cfg, int targetBin) {
   const int C = cfg.numChirpsPerFrame, R = cfg.numRxAnt, S = cfg.numAdcSamples;
@@ -669,11 +670,11 @@ makeRawFrame(const RadarConfig &cfg, int targetBin) {
             static_cast<std::int16_t>(std::lround(1000.0 * std::sin(a)) + nq);
         const int se = (s / 2) * 2;
         if (s % 2 == 0) {
-          blk[2 * se + 0] = I;
-          blk[2 * se + 2] = Q;
+          blk[2 * se + 0] = Q;
+          blk[2 * se + 2] = I;
         } else {
-          blk[2 * se + 1] = I;
-          blk[2 * se + 3] = Q;
+          blk[2 * se + 1] = Q;
+          blk[2 * se + 3] = I;
         }
       }
     }

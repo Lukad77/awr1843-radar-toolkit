@@ -28,19 +28,22 @@ bool ParseStage::parse(const std::vector<std::uint8_t> &raw,
                        static_cast<std::size_t>(outRx),
                        static_cast<std::size_t>(numSamp)});
 
-  // 解交织单个 Rx 通道（与遗留 DataParser::parse_RxChannel 对拍）：
-  // 对每个偶数采样点 s，base=s*2 处的 4 个 int16 为 I0 I1 Q0 Q1，
-  // 即采样点 s = (I0,Q0)、采样点 s+1 = (I1,Q1)。
+  // 解交织单个 Rx 通道。线上每 4 个 int16 为一组 [x0 x1 y0 y1]，
+  // 覆盖两个连续采样点：s = (y0, x0)、s+1 = (y1, x1) —— 前两个是
+  // 虚部、后两个是实部。遗留 DataParser 按 (x, y) = (I, Q) 组复数，
+  // 会把目标镜像到负频率 bin（实测本数据集正/镜像 bin 幅度比
+  // 1:54，正频率一侧只剩泄漏裙边）；MATLAB 参考实现读入后同样
+  // 显式做了 imag + 1i*real 交换（respiratory_main_F5_only.m）。
   auto fillRx = [&](std::size_t rxbase, std::size_t chirp,
                     std::size_t outRxIdx) {
     for (int s = 0; s < numSamp; s += 2) {
       const std::size_t base = rxbase + static_cast<std::size_t>(s) * 2;
-      const float I0 = static_cast<float>(p[base + 0]);
-      const float I1 = static_cast<float>(p[base + 1]);
-      const float Q0 = static_cast<float>(p[base + 2]);
-      const float Q1 = static_cast<float>(p[base + 3]);
-      fb.at(chirp, outRxIdx, s) = {I0, Q0};
-      fb.at(chirp, outRxIdx, s + 1) = {I1, Q1};
+      const float x0 = static_cast<float>(p[base + 0]);
+      const float x1 = static_cast<float>(p[base + 1]);
+      const float y0 = static_cast<float>(p[base + 2]);
+      const float y1 = static_cast<float>(p[base + 3]);
+      fb.at(chirp, outRxIdx, s) = {y0, x0};
+      fb.at(chirp, outRxIdx, s + 1) = {y1, x1};
     }
   };
 

@@ -1,6 +1,7 @@
 // test_pipeline.cpp — Phase 3 测试：ParseStage 解交织 + Pipeline
 // 保序/无损行为（无硬件；帧在内存中合成）。
 
+#include <complex>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -50,7 +51,8 @@ static std::shared_ptr<std::vector<std::uint8_t>> makeRaw(int numInt16) {
   return buf;
 }
 
-// 参考解交织（对拍遗留 DataParser::parse_RxChannel）用于验证。
+// 参考解交织（与 ParseStage 的 [x0 x1 y0 y1] -> (y, x) 约定对拍：
+// 每 4 个 int16 前两个是虚部、后两个是实部）用于验证。
 static std::complex<float> expectedSample(int c, int r, int s, int numRx,
                                           int numSamp) {
   const int int16PerRx = numSamp * 2;
@@ -62,8 +64,8 @@ static std::complex<float> expectedSample(int c, int r, int s, int numRx,
     return static_cast<float>(static_cast<std::int16_t>(k));
   };
   if (s % 2 == 0)
-    return {val(base + 0), val(base + 2)};
-  return {val(base + 1), val(base + 3)};
+    return {val(base + 2), val(base + 0)};
+  return {val(base + 3), val(base + 1)};
 }
 
 static void test_parse_single_rx() {
