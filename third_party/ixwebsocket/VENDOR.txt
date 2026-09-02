@@ -1,0 +1,3 @@
+IXWebSocket v11.4.5 (github.com/machinezone/IXWebSocket, tag v11.4.5, MIT)
+以 USE_TLS=OFF、USE_ZLIB=OFF 构建：仅依赖标准库 + 系统 socket。
+仅保留库源码与 CMake 集成所需文件（剔除 test/ws/docker/docs）。
