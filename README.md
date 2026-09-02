@@ -247,6 +247,8 @@ CMake 定义了七个独立的可执行目标：
 | `radar_spool_tests` | 两级无损FrameSpool单测（RAM→磁盘溢写FIFO保序） | 无 |
 | `radar_dsp_tests` | DSP算子单测（FFT对拍朴素DFT、Range/Doppler峰值定位、CFAR检测/虚警、Angle导向矢量、MTI、相位解缠、全链过Pipeline回压保序） | 无 |
 | `radar_dsp_demo` | 真实数据集端到端 DSP 链 demo（逐 stage 耗时/检测摘要/相位 CSV） | 无 |
+| `radar_web_demo` | 离线回放 + WebSocket 实时推送（浏览器实时显示，可选 target） | 无 |
+| `radar_web_tests` | Web wire 协议单测（编码布局回读对拍，仅 RADAR_BUILD_WEB=ON 时注册） | 无 |
 
 ## 使用说明
 
@@ -306,6 +308,34 @@ CMake 定义了七个独立的可执行目标：
 读取录制的 ADC bin，逐帧跑完整算子链，输出：逐 stage 耗时、检测摘要（距离/速度/角度/SNR）、相位与位移 CSV（含 trackBin/trackAmp 质量列）。真实数据集实测：2000 帧 invalid=0，单帧 DSP 全链 < 2 ms。
 
 配套诊断脚本：`diagnose_phase.py`（直接读 bin 做相位机理诊断；`--plot` 生成相位曲线对比图，需 numpy/matplotlib）。
+
+### Web 实时显示（无硬件）
+
+离线回放 + 浏览器实时图表（原始 ADC 波形 / 距离谱 / 相位位移 / 呼吸波形与呼吸率）：
+
+```bash
+# 终端 1：回放并启动 WebSocket 服务（默认端口 8765；--loop 循环回放）
+./build/radar_web_demo <adc_raw.bin> [port] [--loop]
+
+# 浏览器直接打开 web/index.html（file:// 即可；端口非默认时加 ?port=<port>）
+```
+
+- 数据服务端：`WsFrameSink`（IResultSink 扇出，编码 + try_push 入队，专用发送线程
+  广播，客户端过慢时丢帧计数，绝不阻塞 DSP worker）；协议见 `src/web/WireProtocol.h`
+  （每帧一条二进制消息 ~2 KB，接入时下发一次 meta JSON）。
+- 前端零构建工具链：`web/index.html` + `web/app.js` + vendored uPlot；呼吸带通
+  （0.1–0.5 Hz biquad）与呼吸率（30 s 滑窗 Goertzel 谱峰）在前端计算，
+  trackAmp 幅度门控的不可靠样本在呼吸波形上以断线呈现。
+- 依赖：vendored IXWebSocket（`third_party/ixwebsocket`，USE_TLS/USE_ZLIB 关闭，
+  仅标准库 + 系统 socket）。`-DRADAR_BUILD_WEB=OFF` 或删除该目录可完全跳过
+  此 target，不影响其余构建与测试。
+- 链接形态：默认静态（单文件拷贝即部署，推荐 Jetson 等目标机）；
+  `-DRADAR_WEB_SHARED=ON` 改为动态库 `libixwebsocket.so/.dylib`（构建后自动
+  复制到可执行文件旁，二进制带 `$ORIGIN`/`@loader_path` rpath，拷目录即部署），
+  适合多个工具共享一份库或独立升级库的场景。
+- 若浏览器策略禁止 file:// 页面连接 ws://localhost，可用任意静态服务兜底：
+  `python3 -m http.server 8000 -d web` 后访问 `http://localhost:8000`。
+- `--loop` 回卷处相位有一次 ≤π 的桥接跳变（PhaseUnwrapStage 状态跨回卷），属预期显示行为。
 
 ## 配置文件说明
 

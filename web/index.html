@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<!-- index.html — AWR1843 雷达实时显示单页（file:// 直开或任意静态服务）。
+     数据源：ws://localhost:8765（radar_web_demo），协议见 src/web/WireProtocol.h。
+     零构建工具链：原生 JS + vendored uPlot。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>AWR1843 雷达实时显示</title>
+<link rel="stylesheet" href="vendor/uPlot.min.css">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px 20px; background: #0d1117; color: #c9d1d9;
+         font: 14px/1.5 -apple-system, "PingFang SC", "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+  h1 { font-size: 18px; margin: 0; color: #e6edf3; }
+  #status { padding: 2px 10px; border-radius: 10px; font-size: 12px; background: #6e1e1e; }
+  #status.ok { background: #1e6e33; }
+  #meta { font-size: 12px; color: #8b949e; }
+  .controls { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+  .controls input { width: 190px; padding: 3px 8px; font-size: 12px; color: #c9d1d9;
+                    background: #0d1117; border: 1px solid #30363d; border-radius: 6px; }
+  .controls button { padding: 3px 12px; font-size: 12px; color: #c9d1d9; cursor: pointer;
+                     background: #21262d; border: 1px solid #30363d; border-radius: 6px; }
+  .controls button:hover { background: #30363d; }
+  .controls button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  .controls button:disabled { opacity: 0.45; cursor: default; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px 12px; }
+  .card h2 { font-size: 13px; margin: 0 0 6px; color: #8b949e; font-weight: 600; }
+  .card h2 .val { color: #58a6ff; font-weight: 700; }
+  #bpm { font-size: 26px; color: #3fb950; font-weight: 700; }
+  .u-legend { font-size: 11px !important; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>AWR1843 雷达实时显示</h1>
+  <span id="status">未连接</span>
+  <span>呼吸率 <span id="bpm">--</span> 次/分</span>
+  <span id="meta"></span>
+  <span class="controls">
+    <input id="wsurl" type="text" spellcheck="false" title="WebSocket 地址">
+    <button id="btn-conn" class="primary">连接</button>
+    <button id="btn-pause" disabled>暂停</button>
+    <button id="btn-clear">清空</button>
+  </span>
+</header>
+<div class="grid">
+  <div class="card"><h2>原始 ADC 波形（chirp0 / rx0）</h2><div id="chart-adc"></div></div>
+  <div class="card"><h2>距离谱（rx0 chirp 相干均值，跟踪 bin：<span class="val" id="trackbin">-</span>）</h2><div id="chart-range"></div></div>
+  <div class="card"><h2>解缠相位 / 位移（60 s 滚动）</h2><div id="chart-phase"></div></div>
+  <div class="card"><h2>呼吸波形（0.1–0.5 Hz 带通，60 s 滚动）</h2><div id="chart-breath"></div></div>
+</div>
+<script src="vendor/uPlot.iife.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

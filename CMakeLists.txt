@@ -104,6 +104,71 @@ target_include_directories(radar_dsp_demo PRIVATE ${NEWSRC_DIR})
 target_compile_features(radar_dsp_demo PRIVATE cxx_std_17)
 target_link_libraries(radar_dsp_demo PRIVATE Threads::Threads)
 
+# ==========================================================================
+# target 8: radar_web_demo —— 离线回放 + WebSocket 实时推送（可选）
+#   依赖 vendored IXWebSocket（third_party/ixwebsocket，USE_TLS/USE_ZLIB
+#   均关闭 => 仅标准库 + 系统 socket）。目录缺失或 RADAR_BUILD_WEB=OFF
+#   时静默跳过，不影响既有 target 与 ctest。
+# ==========================================================================
+option(RADAR_BUILD_WEB "Build radar_web_demo (requires third_party/ixwebsocket)" ON)
+# 部署形态开关：OFF（默认）= 静态链接，单文件拷贝即部署（推荐 Jetson 等
+# 目标机）；ON = 编译 libixwebsocket 动态库，多工具共享一份 .so / 独立
+# 升级库时使用。动态模式下 .so 会被复制到可执行文件旁，且二进制带
+# $ORIGIN/@loader_path rpath —— 整个目录拷走即可运行。
+option(RADAR_WEB_SHARED "Link IXWebSocket as a shared library" OFF)
+if(RADAR_BUILD_WEB AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ixwebsocket/CMakeLists.txt)
+    set(USE_TLS OFF CACHE BOOL "" FORCE)
+    set(USE_ZLIB OFF CACHE BOOL "" FORCE)
+    set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS ${RADAR_WEB_SHARED} CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/ixwebsocket)
+
+    add_executable(radar_web_demo
+        ${NEWSRC_DIR}/tools/radar_web_demo.cpp
+        ${NEWSRC_DIR}/web/WsFrameSink.cpp
+        ${NEWSRC_DIR}/core/RadarConfig.cpp
+        ${NEWSRC_DIR}/pipeline/ParseStage.cpp
+        ${NEWSRC_DIR}/pipeline/Pipeline.cpp
+        ${DSP_SRCS}
+    )
+    target_include_directories(radar_web_demo PRIVATE ${NEWSRC_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ixwebsocket)
+    target_compile_features(radar_web_demo PRIVATE cxx_std_17)
+    target_link_libraries(radar_web_demo PRIVATE ixwebsocket Threads::Threads)
+
+    if(RADAR_WEB_SHARED)
+        # 相对 rpath：可执行文件优先在自身目录找 .so/.dylib，
+        # 部署 = 拷贝 radar_web_demo + libixwebsocket.* 到同一目录。
+        if(APPLE)
+            set(RADAR_WEB_RPATH "@loader_path")
+        else()
+            set(RADAR_WEB_RPATH "$ORIGIN")
+        endif()
+        set_target_properties(radar_web_demo PROPERTIES
+            BUILD_RPATH "${RADAR_WEB_RPATH}"
+            INSTALL_RPATH "${RADAR_WEB_RPATH}")
+        add_custom_command(TARGET radar_web_demo POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:ixwebsocket>
+                    $<TARGET_FILE_DIR:radar_web_demo>
+            COMMENT "复制 libixwebsocket 动态库到可执行文件目录（拷目录即部署）")
+    endif()
+
+    # wire 协议单测（纯 CPU，无网络），仅在 web 功能开启时注册。
+    add_executable(radar_web_tests
+        ${NEWSRC_DIR}/tests/test_web.cpp
+        ${NEWSRC_DIR}/core/RadarConfig.cpp
+    )
+    target_include_directories(radar_web_tests PRIVATE ${NEWSRC_DIR})
+    target_compile_features(radar_web_tests PRIVATE cxx_std_17)
+    target_link_libraries(radar_web_tests PRIVATE Threads::Threads)
+    add_test(NAME radar_web_tests COMMAND radar_web_tests)
+
+    set(RADAR_WEB_STATUS "radar_web_demo      : 回放 + WebSocket 实时显示（web/index.html）")
+else()
+    set(RADAR_WEB_STATUS "radar_web_demo      : 跳过（RADAR_BUILD_WEB=OFF 或缺 third_party/ixwebsocket）")
+endif()
+
 # ---- 构建提示 ----
 message(STATUS "==============================================================")
 message(STATUS " ${PROJECT_NAME} configured for ${CMAKE_SYSTEM_NAME}")
@@ -112,4 +177,5 @@ message(STATUS "   radar_pipeline_tests: 流水线骨架单测（三平台）")
 message(STATUS "   radar_spool_tests   : 两级无损 FrameSpool 单测（三平台）")
 message(STATUS "   radar_dsp_tests     : Phase4 DSP 算子单测（三平台）")
 message(STATUS "   radar_dsp_demo      : 数据集端到端 DSP 链 demo（三平台）")
+message(STATUS "   ${RADAR_WEB_STATUS}")
 message(STATUS "==============================================================")

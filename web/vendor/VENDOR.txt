@@ -1,0 +1,2 @@
+uPlot 1.6.32 (github.com/leeoniya/uPlot, tag 1.6.32, MIT)
+dist/uPlot.iife.min.js + dist/uPlot.min.css
