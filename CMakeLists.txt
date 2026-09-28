@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.10)
 project(awr1843_radar_toolkit LANGUAGES CXX)
 
 # ---- 全局设置 ----
@@ -58,6 +58,22 @@ target_include_directories(radar_spool_tests PRIVATE ${NEWSRC_DIR})
 target_compile_features(radar_spool_tests PRIVATE cxx_std_17)
 target_link_libraries(radar_spool_tests PRIVATE Threads::Threads)
 add_test(NAME radar_spool_tests COMMAND radar_spool_tests)
+
+# DCA1000 wire reassembly is platform independent; hardware capture is Linux only.
+add_executable(radar_capture_tests
+    ${NEWSRC_DIR}/tests/test_capture.cpp
+    ${NEWSRC_DIR}/transport/Dca1000Reassembler.cpp)
+target_include_directories(radar_capture_tests PRIVATE ${NEWSRC_DIR})
+target_compile_features(radar_capture_tests PRIVATE cxx_std_17)
+add_test(NAME radar_capture_tests COMMAND radar_capture_tests)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(radar_capture
+        ${NEWSRC_DIR}/tools/radar_capture_linux.cpp
+        ${NEWSRC_DIR}/transport/Dca1000Reassembler.cpp)
+    target_include_directories(radar_capture PRIVATE ${NEWSRC_DIR})
+    target_compile_features(radar_capture PRIVATE cxx_std_17)
+endif()
 
 # ==========================================================================
 # Phase 4 DSP 算子源文件（自研 radix-2 FFT，零外部依赖，三平台）

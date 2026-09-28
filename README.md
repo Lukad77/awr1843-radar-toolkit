@@ -1,5 +1,9 @@
 # AWR1843-DCA1000 雷达数据采集与处理工具
 
+> Jetson Nano 实时采集开发分支 `jeston_dev`：Linux 采集入口及逐步验收命令见
+> [Jetson Nano 采集验收](docs/JETSON_NANO_ACCEPTANCE.md)。下文关于“尚未接入实时源”
+> 的说明指原有 `radar_dsp_demo` / `radar_web_demo`，它们仍是离线 demo。
+
 ## 项目简介
 
 本项目是一款针对德州仪器（TI）AWR1843毫米波雷达与DCA1000数据采集卡的开源工具，用于实现雷达原始数据的实时采集、解析、处理与存储。支持离线数据解析与转换，可将二进制雷达数据转换为CSV格式便于分析，并提供灵活的参数配置与日志记录功能。
