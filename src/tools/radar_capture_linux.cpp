@@ -160,7 +160,9 @@ void command(int fd, const sockaddr_in &dca, std::uint16_t code,
     const ssize_t n = ::recvfrom(fd, resp, sizeof(resp), 0,
                                  reinterpret_cast<sockaddr *>(&from), &fromLen);
     if (n < 0) throw std::runtime_error("DCA command timed out or recv failed");
-    if (from.sin_addr.s_addr != dca.sin_addr.s_addr || from.sin_port != dca.sin_port ||
+    // DCA1000 may reply from UDP 1024 even when commands target UDP 4096.
+    // Match the device IP, command code and packet envelope instead.
+    if (from.sin_addr.s_addr != dca.sin_addr.s_addr ||
         n != 8 || le16(resp) != 0xA55A || le16(resp + 6) != 0xEEAA ||
         le16(resp + 2) != code) continue;
     if (le16(resp + 4) != 0)
