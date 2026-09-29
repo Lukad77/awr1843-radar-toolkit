@@ -51,6 +51,10 @@ struct CaptureStop {
   int ctrl = -1, serial = -1;
   sockaddr_in dca{};
   bool recording = false, radarStarted = false;
+  // Set once the normal shutdown path has already retried sensorStop, so the
+  // destructor does not repeat the same failing attempt and print a second,
+  // confusing error after the run summary.
+  bool radarStopTried = false;
   ~CaptureStop();
 };
 
@@ -181,32 +185,80 @@ void writeAll(int fd, const std::string &s) {
   }
 }
 
-void serialCommand(int fd, const std::string &line) {
-  writeAll(fd, line + "\n");
-  std::string reply;
+std::string printable(const std::string &s) {
+  if (s.empty()) return "<no reply>";
+  std::string out;
+  out.reserve(s.size());
+  for (const char c : s) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    if (c == '\r' || c == '\n') out += "\\n";
+    else if (u < 0x20 || u == 0x7f) out += '.';
+    else out += c;
+  }
+  return out;
+}
+
+// Discard anything already pending on the port. The CLI prints its prompt as a
+// separate chunk after "Done", so without this the trailing prompt of one
+// command is mis-attributed to the reply of the next one.
+void drainInput(int fd, int quietMs) {
   for (;;) {
     pollfd p{fd, POLLIN, 0};
-    if (::poll(&p, 1, 3000) <= 0) throw std::runtime_error("serial timeout: " + line);
-    char buf[256]; const ssize_t n = ::read(fd, buf, sizeof(buf));
-    if (n <= 0) throw std::runtime_error("serial read failed: " + line);
-    reply.append(buf, static_cast<std::size_t>(n));
-    if (reply.find("Error") != std::string::npos)
-      throw std::runtime_error("radar rejected " + line + ": " + reply);
-    if (reply.find("Done") != std::string::npos) return;
-    if (reply.size() > 8192) throw std::runtime_error("serial reply too long");
+    if (::poll(&p, 1, quietMs) <= 0) return;
+    char buf[256];
+    if (::read(fd, buf, sizeof(buf)) <= 0) return;
   }
 }
 
-CaptureStop::~CaptureStop() {
-  try {
-    if (radarStarted) serialCommand(serial, "sensorStop");
-  } catch (const std::exception &e) {
-    std::cerr << "sensorStop failed: " << e.what() << '\n';
+void serialCommand(int fd, const std::string &line, int timeoutMs = 3000) {
+  drainInput(fd, 60);
+  writeAll(fd, line + "\n");
+  std::string reply;
+  bool acknowledged = false;
+  for (;;) {
+    // Allow timeoutMs for the CLI to react; once it acknowledged, only wait for
+    // the link to go quiet (the response may arrive in several USB chunks).
+    pollfd p{fd, POLLIN, 0};
+    if (::poll(&p, 1, acknowledged ? 150 : timeoutMs) <= 0) {
+      if (acknowledged) break;
+      throw std::runtime_error("serial timeout: " + line +
+                               " (reply so far: " + printable(reply) + ")");
+    }
+    char buf[256]; const ssize_t n = ::read(fd, buf, sizeof(buf));
+    if (n <= 0) throw std::runtime_error("serial read failed: " + line);
+    reply.append(buf, static_cast<std::size_t>(n));
+    if (reply.find("Error") != std::string::npos ||
+        reply.find("not recognized") != std::string::npos ||
+        reply.find("Unknown") != std::string::npos ||
+        reply.find("Invalid") != std::string::npos)
+      throw std::runtime_error("radar rejected " + line + ": " + printable(reply));
+    // "Done" for accepted commands; "Ignored: ..." for benign no-ops such as
+    // sensorStop on an already-stopped sensor (that one has no "Done").
+    if (reply.find("Done") != std::string::npos ||
+        reply.find("Ignored") != std::string::npos)
+      acknowledged = true;
+    // The xWR18xx CLI prompt (e.g. "mmwDemo:/>") terminates a response.
+    if (reply.find(":/>") != std::string::npos) break;
+    if (reply.size() > 8192) throw std::runtime_error("serial reply too long");
   }
+  // Do not fire the next line before the CLI finished printing its prompt:
+  // sending while it is busy makes the radar UART drop the command's leading
+  // bytes (observed as 'eDataOutputMode' instead of 'dfeDataOutputMode').
+  ::usleep(20000);
+}
+
+CaptureStop::~CaptureStop() {
+  // Same order as the normal shutdown path: quiet the DCA1000 before asking
+  // the radar to stop.
   try {
     if (recording) command(ctrl, dca, 0x06);
   } catch (const std::exception &e) {
     std::cerr << "DCA stop failed: " << e.what() << '\n';
+  }
+  try {
+    if (radarStarted && !radarStopTried) serialCommand(serial, "sensorStop");
+  } catch (const std::exception &e) {
+    std::cerr << "sensorStop (final attempt) failed: " << e.what() << '\n';
   }
 }
 
@@ -247,8 +299,19 @@ int main(int argc, char **argv) {
         throw std::runtime_error("config port bind failed");
       dca = address(o.dcaIp, o.configPort);
       cleanup.ctrl = ctrl.value; cleanup.dca = dca;
-      serial.value = ::open(o.serial.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
-      if (serial.value < 0) throw std::runtime_error("cannot open serial: " + o.serial);
+      // The XDS110 re-enumerates on reset/power-cycle, so the port can be
+      // briefly absent right when the tool starts. Retry instead of failing.
+      constexpr int kSerialOpenAttempts = 10;
+      for (int attempt = 1; attempt <= kSerialOpenAttempts; ++attempt) {
+        serial.value = ::open(o.serial.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
+        if (serial.value >= 0) break;
+        if (attempt == kSerialOpenAttempts)
+          throw std::runtime_error("cannot open serial: " + o.serial + ": " +
+                                   std::strerror(errno));
+        std::cerr << "serial " << o.serial << " not ready ("
+                  << std::strerror(errno) << "), retrying...\n";
+        ::usleep(500000); // 0.5 s, ~5 s total
+      }
       cleanup.serial = serial.value;
       termios tty{};
       if (::tcgetattr(serial.value, &tty)) throw std::runtime_error("tcgetattr failed");
@@ -265,7 +328,25 @@ int main(int argc, char **argv) {
       put16(packet, 1472); put16(packet, static_cast<std::uint16_t>(o.packetDelayUs));
       put16(packet, 0);
       command(ctrl.value, dca, 0x0B, packet);
-      serialCommand(serial.value, "sensorStop");
+      // A silent CLI is not a transient condition: after a capture the mmWave
+      // demo CLI stops answering for good, so retrying the whole cfg sequence
+      // only produces a confusing timeout on the first config command.
+      bool stopped = false;
+      for (int attempt = 1; attempt <= 3 && !stopped; ++attempt) {
+        try {
+          serialCommand(serial.value, "sensorStop", 5000);
+          stopped = true;
+        } catch (const std::exception &e) {
+          std::cerr << "sensorStop attempt " << attempt << "/3 failed: "
+                    << e.what() << '\n';
+        }
+      }
+      if (!stopped)
+        throw std::runtime_error(
+            "radar CLI is not responding to sensorStop. Per-frame UART "
+            "reporting (cfg guiMonitor) starves the demo CLI task, and it does "
+            "not recover on its own: power-cycle or reset the AWR1843BOARD and "
+            "run again.");
       for (const auto &line : cfgCommands) serialCommand(serial.value, line);
       command(ctrl.value, dca, 0x05); cleanup.recording = true;
       serialCommand(serial.value, "sensorStart"); cleanup.radarStarted = true;
@@ -304,11 +385,37 @@ int main(int argc, char **argv) {
                   << " discardedFrames=" << reassembler.discardedFrames() << '\r' << std::flush;
       }
     }
-    if (cleanup.radarStarted) {
-      serialCommand(serial.value, "sensorStop"); cleanup.radarStarted = false;
-    }
+    // Shutdown is best-effort: the capture loop already wrote complete frames,
+    // so a stop command that is ignored by the CLI must not discard the run
+    // (it used to abort before the stats file was written).
+    // The DCA1000 is stopped first so the data path is quiet before the radar
+    // is asked to stop.
     if (cleanup.recording) {
-      command(ctrl.value, dca, 0x06); cleanup.recording = false;
+      try {
+        command(ctrl.value, dca, 0x06);
+        cleanup.recording = false;
+      } catch (const std::exception &e) {
+        std::cerr << "DCA stop failed: " << e.what() << '\n';
+      }
+    }
+    if (cleanup.radarStarted) {
+      for (int attempt = 1; attempt <= 3 && cleanup.radarStarted; ++attempt) {
+        try {
+          serialCommand(serial.value, "sensorStop", 8000);
+          cleanup.radarStarted = false;
+        } catch (const std::exception &e) {
+          std::cerr << "sensorStop attempt " << attempt << "/3 failed: "
+                    << e.what() << '\n';
+        }
+      }
+      if (cleanup.radarStarted) {
+        cleanup.radarStopTried = true;
+        std::cerr << "warning: radar CLI did not acknowledge sensorStop; the "
+                     "captured data is complete. Check that the cfg keeps "
+                     "guiMonitor at all-zero (per-frame UART reporting starves "
+                     "the CLI task) and power-cycle/reset the AWR1843BOARD "
+                     "before the next run.\n";
+      }
     }
     raw.flush(); index.flush();
     std::ofstream stats(o.output + ".stats.txt", std::ios::trunc);
