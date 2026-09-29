@@ -70,10 +70,26 @@ add_test(NAME radar_capture_tests COMMAND radar_capture_tests)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(radar_capture
         ${NEWSRC_DIR}/tools/radar_capture_linux.cpp
+        ${NEWSRC_DIR}/core/CaptureConfig.cpp
+        ${NEWSRC_DIR}/core/Json.cpp
         ${NEWSRC_DIR}/transport/Dca1000Reassembler.cpp)
     target_include_directories(radar_capture PRIVATE ${NEWSRC_DIR})
     target_compile_features(radar_capture PRIVATE cxx_std_17)
 endif()
+
+# ==========================================================================
+# target: radar_config_tests —— 采集入口配置单测（无硬件）
+#   验证：JSON 解析（含转义/嵌套/语法错误定位）、默认值->JSON->命令行三级
+#   合并与优先级、未知键/类型不匹配/文件缺失的报错、跨字段校验。
+# ==========================================================================
+add_executable(radar_config_tests
+    ${NEWSRC_DIR}/tests/test_config.cpp
+    ${NEWSRC_DIR}/core/Json.cpp
+    ${NEWSRC_DIR}/core/CaptureConfig.cpp
+)
+target_include_directories(radar_config_tests PRIVATE ${NEWSRC_DIR})
+target_compile_features(radar_config_tests PRIVATE cxx_std_17)
+add_test(NAME radar_config_tests COMMAND radar_config_tests)
 
 # ==========================================================================
 # Phase 4 DSP 算子源文件（自研 radix-2 FFT，零外部依赖，三平台）
@@ -191,6 +207,7 @@ message(STATUS " ${PROJECT_NAME} configured for ${CMAKE_SYSTEM_NAME}")
 message(STATUS "   radar_core_tests: 新架构基础组件单测（三平台）")
 message(STATUS "   radar_pipeline_tests: 流水线骨架单测（三平台）")
 message(STATUS "   radar_spool_tests   : 两级无损 FrameSpool 单测（三平台）")
+message(STATUS "   radar_config_tests  : 采集入口配置单测（JSON + 三级合并 + 校验）")
 message(STATUS "   radar_dsp_tests     : Phase4 DSP 算子单测（三平台）")
 message(STATUS "   radar_dsp_demo      : 数据集端到端 DSP 链 demo（三平台）")
 message(STATUS "   ${RADAR_WEB_STATUS}")
