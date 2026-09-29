@@ -14,7 +14,7 @@ const char *const kKeys[] = {"output",       "cfg",          "serial",
                              "bindIp",       "dcaIp",        "dataPort",
                              "configPort",   "packetDelayUs", "lvdsLanes",
                              "rcvbuf",       "frameBytes",   "maxFrames",
-                             "noControl"};
+                             "noControl",    "webPort",      "spoolFrames"};
 
 struct FlagSpec {
   const char *flag;
@@ -36,6 +36,8 @@ const FlagSpec kFlags[] = {
     {"--frame-bytes", "frameBytes", true},
     {"--max-frames", "maxFrames", true},
     {"--no-control", "noControl", false},
+    {"--web-port", "webPort", true},
+    {"--spool-frames", "spoolFrames", true},
 };
 
 bool isKnownKey(const std::string &key) {
@@ -206,6 +208,8 @@ bool applyCaptureJson(const JsonValue &root, CaptureConfig &cfg,
     else if (key == "frameBytes") ok = wantU64(value, where, cfg.frameBytes, err);
     else if (key == "maxFrames") ok = wantU64(value, where, cfg.maxFrames, err);
     else if (key == "noControl") ok = wantBool(value, where, cfg.noControl, err);
+    else if (key == "webPort") ok = wantInt(value, where, cfg.webPort, err);
+    else if (key == "spoolFrames") ok = wantInt(value, where, cfg.spoolFrames, err);
     if (!ok) return false;
   }
   return true;
@@ -272,6 +276,8 @@ bool applyCliOverrides(const CliOverrides &cli, CaptureConfig &cfg,
     else if (key == "frameBytes") { if (!cliU64(flag, text, cfg.frameBytes, err)) return false; }
     else if (key == "maxFrames") { if (!cliU64(flag, text, cfg.maxFrames, err)) return false; }
     else if (key == "noControl") { if (!cliBool(flag, text, cfg.noControl, err)) return false; }
+    else if (key == "webPort") { if (!cliInt(flag, text, cfg.webPort, err)) return false; }
+    else if (key == "spoolFrames") { if (!cliInt(flag, text, cfg.spoolFrames, err)) return false; }
     else {
       err = "internal error: unhandled option key \"" + key + "\"";
       return false;
@@ -317,6 +323,27 @@ bool validateCaptureConfig(const CaptureConfig &cfg, std::string &err) {
     err = "rcvbuf must be at least 65536 bytes, got " + std::to_string(cfg.rcvbuf);
     return false;
   }
+  if (cfg.webPort < 1 || cfg.webPort > 65535) {
+    err = "webPort must be in 1..65535, got " + std::to_string(cfg.webPort);
+    return false;
+  }
+  if (cfg.spoolFrames < 1) {
+    err = "spoolFrames must be >= 1, got " + std::to_string(cfg.spoolFrames);
+    return false;
+  }
+  return true;
+}
+
+bool resolveCaptureConfig(int argc, char **argv, CaptureConfig &cfg,
+                          CliOverrides &cli, std::string &err) {
+  if (!parseCli(argc, argv, cli, err)) return false;
+  CaptureConfig merged; // 默认配置（字段未指定时保持默认值）
+  if (!cli.jsonPath.empty() &&
+      !loadCaptureConfigFile(cli.jsonPath, merged, err))
+    return false;
+  if (!applyCliOverrides(cli, merged, err)) return false;
+  if (!validateCaptureConfig(merged, err)) return false;
+  cfg = std::move(merged);
   return true;
 }
 

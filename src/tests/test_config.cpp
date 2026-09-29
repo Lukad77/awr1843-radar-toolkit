@@ -140,12 +140,15 @@ void testDefaultsAndJsonMerge() {
   check(cfg.packetDelayUs == 25 && cfg.lvdsLanes == 4, "default packet/LVDS");
   checkEqU(cfg.frameBytes, 0, "default frameBytes");
   check(!cfg.noControl, "default noControl");
+  check(cfg.webPort == 8765 && cfg.spoolFrames == 64,
+        "default webPort/spoolFrames");
 
   JsonValue root;
   std::string err;
   check(radar::parseJson(
             R"({"capture":{"output":"captures/a.bin","maxFrames":1000,
-                "noControl":true,"bindIp":"192.168.33.30"}})",
+                "noControl":true,"bindIp":"192.168.33.30",
+                "webPort":9001,"spoolFrames":8}})",
             root, err),
         "parse partial config");
   check(radar::applyCaptureJson(root, cfg, err), "apply partial config");
@@ -153,6 +156,7 @@ void testDefaultsAndJsonMerge() {
   checkEqU(cfg.maxFrames, 1000, "json sets maxFrames");
   checkEq(cfg.bindIp, "192.168.33.30", "json sets bindIp");
   check(cfg.noControl, "json sets noControl");
+  check(cfg.webPort == 9001 && cfg.spoolFrames == 8, "json sets web/spool");
   // 未在 JSON 中出现的字段必须保持默认值（合并语义）。
   checkEq(cfg.dcaIp, "192.168.33.180", "unspecified field keeps default");
   check(cfg.dataPort == 4098, "unspecified port keeps default");
@@ -268,7 +272,8 @@ void testCliPrecedence() {
   CliOverrides cli;
   std::string err;
   check(runCli({"radar_capture", "--json", path, "--max-frames", "5",
-                "--no-control", "--frame-bytes", "262144"},
+                "--no-control", "--frame-bytes", "262144",
+                "--web-port", "9002", "--spool-frames", "16"},
                cli, err),
         "parse cli with json");
   checkEq(cli.jsonPath, path, "cli json path");
@@ -284,6 +289,7 @@ void testCliPrecedence() {
   checkEq(cfg.output, "a.bin", "json output kept when cli is silent");
   check(cfg.noControl, "bare --no-control sets the flag");
   checkEqU(cfg.frameBytes, 262144, "cli sets frameBytes");
+  check(cfg.webPort == 9002 && cfg.spoolFrames == 16, "cli sets web/spool");
 
   // 命令行错误
   CliOverrides bad;
@@ -366,6 +372,18 @@ void testValidation() {
   check(contains(msg, "configPort"), "configPort message");
 
   cfg.configPort = 4096;
+  cfg.webPort = 0;
+  err.clear();
+  msg = expectError(radar::validateCaptureConfig(cfg, err), err, "webPort range");
+  check(contains(msg, "webPort"), "webPort message");
+
+  cfg.webPort = 8765;
+  cfg.spoolFrames = 0;
+  err.clear();
+  msg = expectError(radar::validateCaptureConfig(cfg, err), err, "spoolFrames floor");
+  check(contains(msg, "spoolFrames"), "spoolFrames message");
+
+  cfg.spoolFrames = 64;
   err.clear();
   check(radar::validateCaptureConfig(cfg, err), "fully specified config is valid");
 }

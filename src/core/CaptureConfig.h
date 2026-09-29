@@ -40,6 +40,10 @@ struct CaptureConfig {
   std::uint64_t frameBytes = 0; // 每帧字节数；0 表示由 cfg 推导
   std::uint64_t maxFrames = 0;  // 采集上限；0 表示直到 Ctrl-C
   bool noControl = false;       // true => 不控制 DCA1000/雷达，只收包
+
+  // ---- 仅 radar_capture_web 使用 ----
+  int webPort = 8765;      // WebSocket 实时显示端口
+  int spoolFrames = 64;    // 两级无损缓冲的第一级（RAM 环）容量，单位帧
 };
 
 // 把已解析 JSON 文档的 "capture" 节合并到 *this（未列出的键保持原值）。
@@ -61,11 +65,17 @@ struct CliOverrides {
 // 解析 argv（拒绝未知选项、缺少取值），`--no-control` 记作 noControl=true。
 bool parseCli(int argc, char **argv, CliOverrides &out, std::string &err);
 
+
 // 把命令行覆盖项应用到 `cfg`（命令行优先于 JSON 与默认值）。
 bool applyCliOverrides(const CliOverrides &cli, CaptureConfig &cfg,
                        std::string &err);
 
 // 跨字段一致性校验（端口范围、缓冲区下限、模式必需项）。
 bool validateCaptureConfig(const CaptureConfig &cfg, std::string &err);
+
+// 一站式解析：parseCli -> loadCaptureConfigFile -> applyCliOverrides -> validate。
+// 两个采集入口（radar_capture / radar_capture_web）共用，优先级见文件头。
+bool resolveCaptureConfig(int argc, char **argv, CaptureConfig &cfg,
+                          CliOverrides &cli, std::string &err);
 
 } // namespace radar
