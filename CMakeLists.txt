@@ -72,10 +72,39 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         ${NEWSRC_DIR}/tools/radar_capture_linux.cpp
         ${NEWSRC_DIR}/core/CaptureConfig.cpp
         ${NEWSRC_DIR}/core/Json.cpp
-        ${NEWSRC_DIR}/transport/Dca1000Reassembler.cpp)
+        ${NEWSRC_DIR}/core/RadarConfig.cpp
+        ${NEWSRC_DIR}/transport/Dca1000Control.cpp
+        ${NEWSRC_DIR}/transport/Dca1000Reassembler.cpp
+        ${NEWSRC_DIR}/transport/MmwaveCfg.cpp)
     target_include_directories(radar_capture PRIVATE ${NEWSRC_DIR})
     target_compile_features(radar_capture PRIVATE cxx_std_17)
+
+    # radar_source_tests —— IFrameSource 真机 UDP 源单测（localhost 注入，无需硬件）
+    add_executable(radar_source_tests
+        ${NEWSRC_DIR}/tests/test_source.cpp
+        ${NEWSRC_DIR}/transport/Dca1000Reassembler.cpp
+        ${NEWSRC_DIR}/transport/Dca1000UdpSource.cpp
+        ${NEWSRC_DIR}/transport/FrameSpool.cpp)
+    target_include_directories(radar_source_tests PRIVATE ${NEWSRC_DIR})
+    target_compile_features(radar_source_tests PRIVATE cxx_std_17)
+    target_link_libraries(radar_source_tests PRIVATE Threads::Threads)
+    add_test(NAME radar_source_tests COMMAND radar_source_tests)
 endif()
+
+# ==========================================================================
+# target: radar_transport_tests —— 传输层无硬件单测（三平台）
+#   验证：.cfg -> RadarConfig/命令序列 的解析与拒绝规则（单 TX/复数/LVDS 无头）、
+#   原始帧落盘 sink 的产物字节与统计。
+# ==========================================================================
+add_executable(radar_transport_tests
+    ${NEWSRC_DIR}/tests/test_transport.cpp
+    ${NEWSRC_DIR}/core/RadarConfig.cpp
+    ${NEWSRC_DIR}/transport/MmwaveCfg.cpp
+    ${NEWSRC_DIR}/transport/RawFileSink.cpp
+)
+target_include_directories(radar_transport_tests PRIVATE ${NEWSRC_DIR})
+target_compile_features(radar_transport_tests PRIVATE cxx_std_17)
+add_test(NAME radar_transport_tests COMMAND radar_transport_tests)
 
 # ==========================================================================
 # target: radar_config_tests —— 采集入口配置单测（无硬件）
@@ -168,6 +197,32 @@ if(RADAR_BUILD_WEB AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ixwebsocke
     target_compile_features(radar_web_demo PRIVATE cxx_std_17)
     target_link_libraries(radar_web_demo PRIVATE ixwebsocket Threads::Threads)
 
+    # radar_capture_web —— 真机采集 + DSP 流水线 + 落盘 + 网页实时显示（Linux）。
+    #   与只落盘的 radar_capture 共用控制面（Dca1000Control）与参数体系，但数据
+    #   面走 IFrameSource（Dca1000UdpSource）-> Pipeline -> RawFileSink + WsFrameSink。
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(radar_capture_web
+            ${NEWSRC_DIR}/tools/radar_capture_web_linux.cpp
+            ${NEWSRC_DIR}/core/CaptureConfig.cpp
+            ${NEWSRC_DIR}/core/Json.cpp
+            ${NEWSRC_DIR}/core/RadarConfig.cpp
+            ${NEWSRC_DIR}/transport/Dca1000Control.cpp
+            ${NEWSRC_DIR}/transport/Dca1000Reassembler.cpp
+            ${NEWSRC_DIR}/transport/Dca1000UdpSource.cpp
+            ${NEWSRC_DIR}/transport/FrameSpool.cpp
+            ${NEWSRC_DIR}/transport/MmwaveCfg.cpp
+            ${NEWSRC_DIR}/transport/RawFileSink.cpp
+            ${NEWSRC_DIR}/pipeline/ParseStage.cpp
+            ${NEWSRC_DIR}/pipeline/Pipeline.cpp
+            ${NEWSRC_DIR}/web/WsFrameSink.cpp
+            ${DSP_SRCS}
+        )
+        target_include_directories(radar_capture_web PRIVATE ${NEWSRC_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ixwebsocket)
+        target_compile_features(radar_capture_web PRIVATE cxx_std_17)
+        target_link_libraries(radar_capture_web PRIVATE ixwebsocket Threads::Threads)
+    endif()
+
     if(RADAR_WEB_SHARED)
         # 相对 rpath：可执行文件优先在自身目录找 .so/.dylib，
         # 部署 = 拷贝 radar_web_demo + libixwebsocket.* 到同一目录。
@@ -176,14 +231,20 @@ if(RADAR_BUILD_WEB AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ixwebsocke
         else()
             set(RADAR_WEB_RPATH "$ORIGIN")
         endif()
-        set_target_properties(radar_web_demo PROPERTIES
-            BUILD_RPATH "${RADAR_WEB_RPATH}"
-            INSTALL_RPATH "${RADAR_WEB_RPATH}")
-        add_custom_command(TARGET radar_web_demo POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    $<TARGET_FILE:ixwebsocket>
-                    $<TARGET_FILE_DIR:radar_web_demo>
-            COMMENT "复制 libixwebsocket 动态库到可执行文件目录（拷目录即部署）")
+        set(RADAR_WEB_TARGETS radar_web_demo)
+        if(TARGET radar_capture_web)
+            list(APPEND RADAR_WEB_TARGETS radar_capture_web)
+        endif()
+        foreach(web_target ${RADAR_WEB_TARGETS})
+            set_target_properties(${web_target} PROPERTIES
+                BUILD_RPATH "${RADAR_WEB_RPATH}"
+                INSTALL_RPATH "${RADAR_WEB_RPATH}")
+            add_custom_command(TARGET ${web_target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        $<TARGET_FILE:ixwebsocket>
+                        $<TARGET_FILE_DIR:${web_target}>
+                COMMENT "复制 libixwebsocket 动态库到可执行文件目录（拷目录即部署）")
+        endforeach()
     endif()
 
     # wire 协议单测（纯 CPU，无网络），仅在 web 功能开启时注册。
@@ -208,6 +269,8 @@ message(STATUS "   radar_core_tests: 新架构基础组件单测（三平台）"
 message(STATUS "   radar_pipeline_tests: 流水线骨架单测（三平台）")
 message(STATUS "   radar_spool_tests   : 两级无损 FrameSpool 单测（三平台）")
 message(STATUS "   radar_config_tests  : 采集入口配置单测（JSON + 三级合并 + 校验）")
+message(STATUS "   radar_transport_tests: 传输层单测（.cfg 解析 + 原始帧落盘 sink）")
+message(STATUS "   radar_source_tests  : IFrameSource 真机 UDP 源单测（Linux，无硬件）")
 message(STATUS "   radar_dsp_tests     : Phase4 DSP 算子单测（三平台）")
 message(STATUS "   radar_dsp_demo      : 数据集端到端 DSP 链 demo（三平台）")
 message(STATUS "   ${RADAR_WEB_STATUS}")

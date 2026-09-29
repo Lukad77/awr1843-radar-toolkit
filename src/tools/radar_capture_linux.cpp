@@ -1,30 +1,37 @@
 #ifndef __linux__
 #error radar_capture is Linux-only
 #endif
+// radar_capture_linux.cpp — DCA1000 真机采集（Linux/Jetson），只落盘。
+//
+// 数据面：UDP 收包 -> Dca1000Reassembler（48 位 byte count 重组）-> 原始帧
+//         直接写文件（零中间队列，最省 CPU/内存，适合只取数据的场景）。
+// 控制面：Dca1000Control（0x09/0x03/0x0B -> sensorStop -> cfg -> 0x05 -> sensorStart）。
+// 参数：CaptureConfig（命令行 > JSON > 默认值，见 core/CaptureConfig.h）。
+//
+// 需要「采集 + DSP 流水线 + 网页实时显示」时用 radar_capture_web（同源的
+// IFrameSource 版本），本工具刻意不引入 DSP/Web 依赖。
 
-#include <arpa/inet.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
-#include <sys/time.h>
-#include <termios.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
-#include <sstream>
+#include <utility>
 #include <vector>
 
 #include "core/CaptureConfig.h"
+#include "transport/Dca1000Control.h"
 #include "transport/Dca1000Reassembler.h"
+#include "transport/MmwaveCfg.h"
 
 namespace {
 volatile std::sig_atomic_t stopping = 0;
@@ -38,203 +45,6 @@ struct Fd {
   Fd &operator=(const Fd &) = delete;
 };
 
-struct CaptureStop {
-  int ctrl = -1, serial = -1;
-  sockaddr_in dca{};
-  bool recording = false, radarStarted = false;
-  // Set once the normal shutdown path has already retried sensorStop, so the
-  // destructor does not repeat the same failing attempt and print a second,
-  // confusing error after the run summary.
-  bool radarStopTried = false;
-  ~CaptureStop();
-};
-
-std::uint16_t le16(const std::uint8_t *p) {
-  return std::uint16_t(p[0]) | (std::uint16_t(p[1]) << 8);
-}
-void put16(std::vector<std::uint8_t> &v, std::uint16_t x) {
-  v.push_back(static_cast<std::uint8_t>(x));
-  v.push_back(static_cast<std::uint8_t>(x >> 8));
-}
-
-// 参数来源合并：默认配置 -> JSON 文件 -> 命令行，后者优先。任何一步失败都
-// 把可直接展示的原因写入 `err`（含 JSON 字段名或命令行选项名）。
-bool resolveConfig(int argc, char **argv, radar::CaptureConfig &cfg,
-                   radar::CliOverrides &cli, std::string &err) {
-  if (!radar::parseCli(argc, argv, cli, err)) return false;
-  radar::CaptureConfig merged; // 默认配置（字段未指定时保持默认值）
-  if (!cli.jsonPath.empty() &&
-      !radar::loadCaptureConfigFile(cli.jsonPath, merged, err))
-    return false;
-  if (!radar::applyCliOverrides(cli, merged, err)) return false;
-  if (!radar::validateCaptureConfig(merged, err)) return false;
-  cfg = std::move(merged);
-  return true;
-}
-
-// Only the supported single-TX, complex 16-bit raw ADC profile is accepted.
-std::size_t cfgFrameBytes(const std::string &path, std::vector<std::string> &commands) {
-  std::ifstream in(path);
-  if (!in) throw std::runtime_error("cannot open radar cfg: " + path);
-  int rxMask = -1, samples = -1, chirpStart = -1, chirpEnd = -1, loops = -1;
-  int adcBits = -1, adcFmt = -1, lvdsFmt = -1, lvdsHeader = -1;
-  std::vector<int> chirpTxMasks;
-  std::string line;
-  while (std::getline(in, line)) {
-    const auto cut = line.find_first_of("%#");
-    if (cut != std::string::npos) line.resize(cut);
-    std::istringstream ss(line);
-    std::vector<std::string> t;
-    for (std::string word; ss >> word;) t.push_back(word);
-    if (t.empty() || t[0] == "sensorStart" || t[0] == "sensorStop") continue;
-    if (t[0] == "channelCfg" && t.size() >= 3) rxMask = std::stoi(t[1]);
-    if (t[0] == "profileCfg" && t.size() >= 11) samples = std::stoi(t[10]);
-    if (t[0] == "frameCfg" && t.size() >= 4) {
-      chirpStart = std::stoi(t[1]); chirpEnd = std::stoi(t[2]); loops = std::stoi(t[3]);
-    }
-    if (t[0] == "adcCfg" && t.size() >= 3) {
-      adcBits = std::stoi(t[1]); adcFmt = std::stoi(t[2]);
-    }
-    if (t[0] == "chirpCfg" && t.size() >= 9) chirpTxMasks.push_back(std::stoi(t[8]));
-    if (t[0] == "lvdsStreamCfg" && t.size() >= 4) {
-      lvdsHeader = std::stoi(t[2]); lvdsFmt = std::stoi(t[3]);
-    }
-    commands.push_back(line);
-  }
-  if (rxMask <= 0 || samples <= 0 || chirpStart < 0 || chirpEnd != chirpStart ||
-      loops <= 0 || adcBits != 2 || adcFmt != 1 || lvdsHeader != 0 || lvdsFmt != 1 ||
-      chirpTxMasks.empty() ||
-      std::any_of(chirpTxMasks.begin(), chirpTxMasks.end(), [](int mask) {
-        return mask <= 0 || (mask & (mask - 1)) != 0;
-      }))
-    throw std::runtime_error("cfg requires one TX chirp, complex 16-bit ADC and LVDS raw ADC without headers");
-  const int rx = __builtin_popcount(static_cast<unsigned>(rxMask));
-  return static_cast<std::size_t>(rx) * samples * loops * 4;
-}
-
-sockaddr_in address(const std::string &ip, int port) {
-  sockaddr_in a{};
-  a.sin_family = AF_INET;
-  a.sin_port = htons(static_cast<std::uint16_t>(port));
-  if (::inet_pton(AF_INET, ip.c_str(), &a.sin_addr) != 1)
-    throw std::runtime_error("invalid IPv4 address: " + ip);
-  return a;
-}
-
-void command(int fd, const sockaddr_in &dca, std::uint16_t code,
-             const std::vector<std::uint8_t> &payload = {}) {
-  std::vector<std::uint8_t> req;
-  put16(req, 0xA55A); put16(req, code);
-  put16(req, static_cast<std::uint16_t>(payload.size()));
-  req.insert(req.end(), payload.begin(), payload.end());
-  put16(req, 0xEEAA);
-  if (::sendto(fd, req.data(), req.size(), 0, reinterpret_cast<const sockaddr *>(&dca),
-               sizeof(dca)) != static_cast<ssize_t>(req.size()))
-    throw std::runtime_error("DCA command send failed");
-  for (;;) {
-    std::uint8_t resp[512];
-    sockaddr_in from{}; socklen_t fromLen = sizeof(from);
-    const ssize_t n = ::recvfrom(fd, resp, sizeof(resp), 0,
-                                 reinterpret_cast<sockaddr *>(&from), &fromLen);
-    if (n < 0) throw std::runtime_error("DCA command timed out or recv failed");
-    // DCA1000 may reply from UDP 1024 even when commands target UDP 4096.
-    // Match the device IP, command code and packet envelope instead.
-    if (from.sin_addr.s_addr != dca.sin_addr.s_addr ||
-        n != 8 || le16(resp) != 0xA55A || le16(resp + 6) != 0xEEAA ||
-        le16(resp + 2) != code) continue;
-    if (le16(resp + 4) != 0)
-      throw std::runtime_error("DCA rejected command " + std::to_string(code));
-    return;
-  }
-}
-
-void writeAll(int fd, const std::string &s) {
-  const char *p = s.data(); std::size_t n = s.size();
-  while (n) {
-    const ssize_t k = ::write(fd, p, n);
-    if (k < 0 && errno == EINTR) continue;
-    if (k <= 0) throw std::runtime_error("serial write failed");
-    p += k; n -= static_cast<std::size_t>(k);
-  }
-}
-
-std::string printable(const std::string &s) {
-  if (s.empty()) return "<no reply>";
-  std::string out;
-  out.reserve(s.size());
-  for (const char c : s) {
-    const unsigned char u = static_cast<unsigned char>(c);
-    if (c == '\r' || c == '\n') out += "\\n";
-    else if (u < 0x20 || u == 0x7f) out += '.';
-    else out += c;
-  }
-  return out;
-}
-
-// Discard anything already pending on the port. The CLI prints its prompt as a
-// separate chunk after "Done", so without this the trailing prompt of one
-// command is mis-attributed to the reply of the next one.
-void drainInput(int fd, int quietMs) {
-  for (;;) {
-    pollfd p{fd, POLLIN, 0};
-    if (::poll(&p, 1, quietMs) <= 0) return;
-    char buf[256];
-    if (::read(fd, buf, sizeof(buf)) <= 0) return;
-  }
-}
-
-void serialCommand(int fd, const std::string &line, int timeoutMs = 3000) {
-  drainInput(fd, 60);
-  writeAll(fd, line + "\n");
-  std::string reply;
-  bool acknowledged = false;
-  for (;;) {
-    // Allow timeoutMs for the CLI to react; once it acknowledged, only wait for
-    // the link to go quiet (the response may arrive in several USB chunks).
-    pollfd p{fd, POLLIN, 0};
-    if (::poll(&p, 1, acknowledged ? 150 : timeoutMs) <= 0) {
-      if (acknowledged) break;
-      throw std::runtime_error("serial timeout: " + line +
-                               " (reply so far: " + printable(reply) + ")");
-    }
-    char buf[256]; const ssize_t n = ::read(fd, buf, sizeof(buf));
-    if (n <= 0) throw std::runtime_error("serial read failed: " + line);
-    reply.append(buf, static_cast<std::size_t>(n));
-    if (reply.find("Error") != std::string::npos ||
-        reply.find("not recognized") != std::string::npos ||
-        reply.find("Unknown") != std::string::npos ||
-        reply.find("Invalid") != std::string::npos)
-      throw std::runtime_error("radar rejected " + line + ": " + printable(reply));
-    // "Done" for accepted commands; "Ignored: ..." for benign no-ops such as
-    // sensorStop on an already-stopped sensor (that one has no "Done").
-    if (reply.find("Done") != std::string::npos ||
-        reply.find("Ignored") != std::string::npos)
-      acknowledged = true;
-    // The xWR18xx CLI prompt (e.g. "mmwDemo:/>") terminates a response.
-    if (reply.find(":/>") != std::string::npos) break;
-    if (reply.size() > 8192) throw std::runtime_error("serial reply too long");
-  }
-  // Do not fire the next line before the CLI finished printing its prompt:
-  // sending while it is busy makes the radar UART drop the command's leading
-  // bytes (observed as 'eDataOutputMode' instead of 'dfeDataOutputMode').
-  ::usleep(20000);
-}
-
-CaptureStop::~CaptureStop() {
-  // Same order as the normal shutdown path: quiet the DCA1000 before asking
-  // the radar to stop.
-  try {
-    if (recording) command(ctrl, dca, 0x06);
-  } catch (const std::exception &e) {
-    std::cerr << "DCA stop failed: " << e.what() << '\n';
-  }
-  try {
-    if (radarStarted && !radarStopTried) serialCommand(serial, "sensorStop");
-  } catch (const std::exception &e) {
-    std::cerr << "sensorStop (final attempt) failed: " << e.what() << '\n';
-  }
-}
-
 } // namespace
 
 int main(int argc, char **argv) {
@@ -242,110 +52,72 @@ int main(int argc, char **argv) {
     radar::CliOverrides cli;
     radar::CaptureConfig cfg;
     std::string configErr;
-    if (!resolveConfig(argc, argv, cfg, cli, configErr))
+    if (!radar::resolveCaptureConfig(argc, argv, cfg, cli, configErr))
       throw std::runtime_error(configErr);
     // 把参数来源显式打出来，便于确认「命令行 > JSON > 默认值」的实际生效情况。
     std::cout << "config: json=" << (cli.jsonPath.empty() ? "<none>" : cli.jsonPath)
               << " cliOverrides=" << cli.values.size() << '\n';
 
-    std::vector<std::string> cfgCommands;
-    const std::size_t cfgBytes = cfg.cfg.empty() ? 0 : cfgFrameBytes(cfg.cfg, cfgCommands);
+    radar::MmwaveCfg mmcfg;
+    if (!cfg.cfg.empty()) {
+      std::string cfgErr;
+      if (!radar::loadMmwaveCfg(cfg.cfg, mmcfg, cfgErr))
+        throw std::runtime_error(cfgErr);
+    }
+    const std::size_t cfgBytes = static_cast<std::size_t>(mmcfg.radar.bytesPerFrame);
     if (cfg.frameBytes && cfgBytes && cfg.frameBytes != cfgBytes)
       throw std::runtime_error("frameBytes disagrees with the radar cfg frame size");
     const std::size_t frameBytes = cfgBytes ? cfgBytes : cfg.frameBytes;
+
     std::ofstream raw(cfg.output, std::ios::binary | std::ios::trunc);
     std::ofstream index(cfg.output + ".frames.csv", std::ios::trunc);
     if (!raw || !index) throw std::runtime_error("cannot create output files");
     index << "file_frame,wire_frame\n";
+
     Fd data(::socket(AF_INET, SOCK_DGRAM, 0));
     if (data.value < 0) throw std::runtime_error("data socket failed");
     ::setsockopt(data.value, SOL_SOCKET, SO_RCVBUF, &cfg.rcvbuf, sizeof(cfg.rcvbuf));
-    const auto bindAddr = address(cfg.bindIp, cfg.dataPort);
-    if (::bind(data.value, reinterpret_cast<const sockaddr *>(&bindAddr), sizeof(bindAddr)))
-      throw std::runtime_error("data port bind failed: " + std::string(std::strerror(errno)));
-    int actualBuf = 0; socklen_t len = sizeof(actualBuf);
+    sockaddr_in bindAddr{};
+    std::string addrErr;
+    if (!radar::resolveIpv4(cfg.bindIp, cfg.dataPort, bindAddr, addrErr))
+      throw std::runtime_error(addrErr);
+    if (::bind(data.value, reinterpret_cast<const sockaddr *>(&bindAddr),
+               sizeof(bindAddr)))
+      throw std::runtime_error("data port bind failed: " +
+                               std::string(std::strerror(errno)));
+    int actualBuf = 0;
+    socklen_t len = sizeof(actualBuf);
     ::getsockopt(data.value, SOL_SOCKET, SO_RCVBUF, &actualBuf, &len);
     std::cout << "frameBytes=" << frameBytes << " SO_RCVBUF=" << actualBuf << '\n';
 
-    Fd ctrl, serial;
-    sockaddr_in dca{};
-    CaptureStop cleanup;
+    std::unique_ptr<radar::Dca1000Control> ctrl;
     if (!cfg.noControl) {
-      ctrl.value = ::socket(AF_INET, SOCK_DGRAM, 0);
-      if (ctrl.value < 0) throw std::runtime_error("command socket failed");
-      timeval timeout{2, 0};
-      ::setsockopt(ctrl.value, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-      const auto local = address(cfg.bindIp, cfg.configPort);
-      if (::bind(ctrl.value, reinterpret_cast<const sockaddr *>(&local), sizeof(local)))
-        throw std::runtime_error("config port bind failed");
-      dca = address(cfg.dcaIp, cfg.configPort);
-      cleanup.ctrl = ctrl.value; cleanup.dca = dca;
-      // The XDS110 re-enumerates on reset/power-cycle, so the port can be
-      // briefly absent right when the tool starts. Retry instead of failing.
-      constexpr int kSerialOpenAttempts = 10;
-      for (int attempt = 1; attempt <= kSerialOpenAttempts; ++attempt) {
-        serial.value = ::open(cfg.serial.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
-        if (serial.value >= 0) break;
-        if (attempt == kSerialOpenAttempts)
-          throw std::runtime_error("cannot open serial: " + cfg.serial + ": " +
-                                   std::strerror(errno));
-        std::cerr << "serial " << cfg.serial << " not ready ("
-                  << std::strerror(errno) << "), retrying...\n";
-        ::usleep(500000); // 0.5 s, ~5 s total
-      }
-      cleanup.serial = serial.value;
-      termios tty{};
-      if (::tcgetattr(serial.value, &tty)) throw std::runtime_error("tcgetattr failed");
-      ::cfmakeraw(&tty);
-      ::cfsetispeed(&tty, B115200); ::cfsetospeed(&tty, B115200);
-      tty.c_cflag |= CLOCAL | CREAD;
-      if (::tcsetattr(serial.value, TCSANOW, &tty)) throw std::runtime_error("tcsetattr failed");
-      ::tcflush(serial.value, TCIFLUSH);
-      command(ctrl.value, dca, 0x09); // connectivity
-      std::vector<std::uint8_t> fpga{1, static_cast<std::uint8_t>(cfg.lvdsLanes == 4 ? 1 : 2),
-                                     1, 2, 3, 30};
-      command(ctrl.value, dca, 0x03, fpga); // raw, LVDS, Ethernet, 16-bit
-      std::vector<std::uint8_t> packet;
-      put16(packet, 1472); put16(packet, static_cast<std::uint16_t>(cfg.packetDelayUs));
-      put16(packet, 0);
-      command(ctrl.value, dca, 0x0B, packet);
-      // A silent CLI is not a transient condition: after a capture the mmWave
-      // demo CLI stops answering for good, so retrying the whole cfg sequence
-      // only produces a confusing timeout on the first config command.
-      bool stopped = false;
-      for (int attempt = 1; attempt <= 3 && !stopped; ++attempt) {
-        try {
-          serialCommand(serial.value, "sensorStop", 5000);
-          stopped = true;
-        } catch (const std::exception &e) {
-          std::cerr << "sensorStop attempt " << attempt << "/3 failed: "
-                    << e.what() << '\n';
-        }
-      }
-      if (!stopped)
-        throw std::runtime_error(
-            "radar CLI is not responding to sensorStop. Per-frame UART "
-            "reporting (cfg guiMonitor) starves the demo CLI task, and it does "
-            "not recover on its own: power-cycle or reset the AWR1843BOARD and "
-            "run again.");
-      for (const auto &line : cfgCommands) serialCommand(serial.value, line);
-      command(ctrl.value, dca, 0x05); cleanup.recording = true;
-      serialCommand(serial.value, "sensorStart"); cleanup.radarStarted = true;
+      ctrl = std::make_unique<radar::Dca1000Control>(radar::linkOptionsFrom(cfg));
+      ctrl->open();
+      ctrl->connect();        // 0x09 连通性
+      ctrl->configureFpga();  // 0x03 原始 ADC / LVDS / 以太网 / 16 bit
+      ctrl->setPacketDelay(); // 0x0B 每包延迟
+      ctrl->stopRadarOrThrow();
+      ctrl->sendCfgCommands(mmcfg.commands);
+      ctrl->startRecording(); // 0x05
+      ctrl->radarStart();     // sensorStart
     }
 
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
     std::uint64_t saved = 0;
     std::uint64_t lastReported = 0;
-    radar::Dca1000Reassembler reassembler(frameBytes,
-      [&](std::uint64_t wireFrame, const std::vector<std::uint8_t> &frame) {
-        raw.write(reinterpret_cast<const char *>(frame.data()),
-                  static_cast<std::streamsize>(frame.size()));
-        index << saved << ',' << wireFrame << '\n';
-        if (!raw || !index) throw std::runtime_error("output write failed");
-        ++saved;
-        return true;
-      });
+    radar::Dca1000Reassembler reassembler(
+        frameBytes, [&](std::uint64_t wireFrame,
+                        const std::vector<std::uint8_t> &frame) {
+          raw.write(reinterpret_cast<const char *>(frame.data()),
+                    static_cast<std::streamsize>(frame.size()));
+          index << saved << ',' << wireFrame << '\n';
+          if (!raw || !index) throw std::runtime_error("output write failed");
+          ++saved;
+          return true;
+        });
+
     std::uint8_t packet[65536];
     while (!stopping && (!cfg.maxFrames || saved < cfg.maxFrames)) {
       pollfd p{data.value, POLLIN, 0};
@@ -353,52 +125,42 @@ int main(int argc, char **argv) {
       if (ready < 0 && errno == EINTR) continue;
       if (ready < 0) throw std::runtime_error("data poll failed");
       if (!ready) continue;
-      sockaddr_in from{}; socklen_t fromLen = sizeof(from);
+      sockaddr_in from{};
+      socklen_t fromLen = sizeof(from);
       const ssize_t n = ::recvfrom(data.value, packet, sizeof(packet), 0,
                                    reinterpret_cast<sockaddr *>(&from), &fromLen);
       if (n < 0 && errno == EINTR) continue;
       if (n < 0) throw std::runtime_error("data receive failed");
-      if (!cfg.noControl && from.sin_addr.s_addr != dca.sin_addr.s_addr) continue;
+      if (ctrl && from.sin_addr.s_addr != ctrl->dcaAddress().sin_addr.s_addr)
+        continue;
       reassembler.consume(packet, static_cast<std::size_t>(n));
       if (saved && saved % 100 == 0 && saved != lastReported) {
         lastReported = saved;
-        std::cout << "saved=" << saved << " missingPackets=" << reassembler.missingPackets()
-                  << " discardedFrames=" << reassembler.discardedFrames() << '\r' << std::flush;
+        std::cout << "saved=" << saved
+                  << " missingPackets=" << reassembler.missingPackets()
+                  << " discardedFrames=" << reassembler.discardedFrames() << '\r'
+                  << std::flush;
       }
     }
+
     // Shutdown is best-effort: the capture loop already wrote complete frames,
     // so a stop command that is ignored by the CLI must not discard the run
     // (it used to abort before the stats file was written).
     // The DCA1000 is stopped first so the data path is quiet before the radar
     // is asked to stop.
-    if (cleanup.recording) {
-      try {
-        command(ctrl.value, dca, 0x06);
-        cleanup.recording = false;
-      } catch (const std::exception &e) {
-        std::cerr << "DCA stop failed: " << e.what() << '\n';
-      }
-    }
-    if (cleanup.radarStarted) {
-      for (int attempt = 1; attempt <= 3 && cleanup.radarStarted; ++attempt) {
+    if (ctrl) {
+      if (ctrl->recording()) {
         try {
-          serialCommand(serial.value, "sensorStop", 8000);
-          cleanup.radarStarted = false;
+          ctrl->stopRecording();
         } catch (const std::exception &e) {
-          std::cerr << "sensorStop attempt " << attempt << "/3 failed: "
-                    << e.what() << '\n';
+          std::cerr << "DCA stop failed: " << e.what() << '\n';
         }
       }
-      if (cleanup.radarStarted) {
-        cleanup.radarStopTried = true;
-        std::cerr << "warning: radar CLI did not acknowledge sensorStop; the "
-                     "captured data is complete. Check that the cfg keeps "
-                     "guiMonitor at all-zero (per-frame UART reporting starves "
-                     "the CLI task) and power-cycle/reset the AWR1843BOARD "
-                     "before the next run.\n";
-      }
+      if (ctrl->radarStarted()) ctrl->stopRadarBestEffort();
     }
-    raw.flush(); index.flush();
+
+    raw.flush();
+    index.flush();
     std::ofstream stats(cfg.output + ".stats.txt", std::ios::trunc);
     stats << "savedFrames=" << saved << '\n'
           << "frameBytes=" << frameBytes << '\n'
@@ -406,12 +168,16 @@ int main(int argc, char **argv) {
           << "latePackets=" << reassembler.latePackets() << '\n'
           << "malformedPackets=" << reassembler.malformedPackets() << '\n'
           << "discardedFrames=" << reassembler.discardedFrames() << '\n';
-    std::cout << "\nsaved=" << saved << " missingPackets=" << reassembler.missingPackets()
+    std::cout << "\nsaved=" << saved
+              << " missingPackets=" << reassembler.missingPackets()
               << " latePackets=" << reassembler.latePackets()
               << " malformedPackets=" << reassembler.malformedPackets()
               << " discardedFrames=" << reassembler.discardedFrames() << '\n';
     return raw && index && stats && saved && !reassembler.missingPackets() &&
-                   !reassembler.discardedFrames() && !reassembler.malformedPackets() ? 0 : 2;
+                   !reassembler.discardedFrames() &&
+                   !reassembler.malformedPackets()
+               ? 0
+               : 2;
   } catch (const std::exception &e) {
     std::cerr << "capture failed: " << e.what() << '\n';
     return 1;
