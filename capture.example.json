@@ -1,0 +1,17 @@
+{
+  "capture": {
+    "output": "captures/adc.bin",
+    "cfg": "awr1843.cfg",
+    "serial": "/dev/ttyACM0",
+    "bindIp": "192.168.33.30",
+    "dcaIp": "192.168.33.180",
+    "dataPort": 4098,
+    "configPort": 4096,
+    "packetDelayUs": 25,
+    "lvdsLanes": 4,
+    "rcvbuf": 16777216,
+    "frameBytes": 0,
+    "maxFrames": 1000,
+    "noControl": false
+  }
+}

@@ -1,9 +1,28 @@
 # Jetson Nano 采集验收（`jeston_dev`）
 
+**适用范围**：在 Jetson Nano（Linux）上用 `radar_capture` 做 AWR1843 + DCA1000
+真机采集的完整流程——前置条件、逐步验收标准与故障排查。只想先跑通链路请看
+README 的[快速上手](../README.md#快速上手5-分钟)；架构与其它模块见
+[README](../README.md) 与[架构演进记录](ARCHITECTURE_EVOLUTION.md)。
+
 此分支新增 Linux 专用 `radar_capture`。它接收 DCA1000 原始 UDP 包，按 48 位
 byte count 重组，只把完整 ADC 帧写入 `adc.bin`。同时生成
 `adc.bin.frames.csv`（文件帧号与线上帧号对应）及 `adc.bin.stats.txt`。
 发生包缺失、帧缺损、文件写入失败或没有完整帧时，程序返回非零状态。
+
+## 目录
+
+| # | 内容 | 何时看 |
+|---|------|--------|
+| [1](#1-nano-本机编译) | Nano 本机编译 | 首次上手 |
+| [2](#2-无硬件-udp-回放验收) | 无硬件 UDP 回放验收 | 没有硬件时先验证链路 |
+| [3](#3-dca1000-和-awr1843-控制验收) | DCA1000 和 AWR1843 控制验收 | 真机采集 |
+| [3.1](#31-json-配置方式推荐) | JSON 配置方式（推荐） | 想用配置文件管理参数 |
+| [4](#4-原始数据与完整性验收) | 原始数据与完整性验收 | 采集后核对零丢包 |
+| [5](#5-持续采集验收) | 持续采集验收 | 长跑压测 |
+| [6](#6-串口交互排查serial-timeout--radar-rejected) | 串口交互排查 | 串口报错时 |
+| [6.1](#61-已知问题已定位修复流式结束后-cli-卡死) | 流式结束后 CLI 卡死（已修复） | 遇上 `sensorStop` 无响应 |
+| [7](#7-本次实时采集调试修复清单) | 本次调试修复清单 | 回顾改了什么 |
 
 ## 1. Nano 本机编译
 
@@ -68,6 +87,88 @@ mkdir -p captures
 验收：启动过程不出现 DCA 命令超时/拒绝或雷达 CLI `Error`；DCA 数据灯
 有活动；程序接收足够数据后自行停止雷达与记录。串口若无权限，请检查
 设备所属用户组后赋予当前用户访问权。
+
+### 3.1 JSON 配置方式（推荐）
+
+入口参数也可以（推荐）由 JSON 配置文件提供，命令行方式仍完全兼容。加载方式：
+
+```bash
+./build/radar_capture --json capture.example.json
+```
+
+**优先级：命令行 > JSON 文件 > 内置默认值。** 即先取默认值，再用 JSON 的
+`capture` 节覆盖，最后用命令行显式给出的选项覆盖；因此 JSON 里只写关心的
+字段即可，其余自动落到默认值。启动时会打印实际来源，便于确认生效情况：
+
+```
+config: json=capture.example.json cliOverrides=0
+```
+
+JSON 结构（顶层对象只认 `capture` 节）：
+
+```json
+{
+  "capture": {
+    "output": "captures/adc.bin",
+    "cfg": "awr1843.cfg",
+    "serial": "/dev/ttyACM0",
+    "bindIp": "192.168.33.30",
+    "dcaIp": "192.168.33.180",
+    "dataPort": 4098,
+    "configPort": 4096,
+    "packetDelayUs": 25,
+    "lvdsLanes": 4,
+    "rcvbuf": 16777216,
+    "frameBytes": 0,
+    "maxFrames": 1000,
+    "noControl": false
+  }
+}
+```
+
+| 字段 | 类型 | 默认值 | 对应命令行 | 说明 |
+|------|------|--------|-----------|------|
+| `output` | string | 无（必填） | `--output` | 原始帧落盘路径，同时生成 `.frames.csv` 与 `.stats.txt` |
+| `cfg` | string | 空 | `--cfg` | mmWave CLI 配置；硬件模式必填，被动模式下也可用于推导 `frameBytes` |
+| `serial` | string | 空 | `--serial` | 雷达 CLI 串口；硬件模式必填 |
+| `bindIp` | string | `0.0.0.0` | `--bind-ip` | 本机绑定地址（建议填与 DCA1000 同网段的地址） |
+| `dcaIp` | string | `192.168.33.180` | `--dca-ip` | DCA1000 地址 |
+| `dataPort` | int | `4098` | `--data-port` | DCA1000 数据端口 |
+| `configPort` | int | `4096` | `--config-port` | DCA1000 命令端口 |
+| `packetDelayUs` | int | `25` | `--packet-delay-us` | 发包间隔，范围 5–500 |
+| `lvdsLanes` | int | `4` | `--lvds-lanes` | LVDS 通道数，2 或 4 |
+| `rcvbuf` | int | `8388608` | `--rcvbuf` | `SO_RCVBUF` 请求值，≥ 65536（会被内核上限截断，见第 5 节） |
+| `frameBytes` | int | `0` | `--frame-bytes` | 每帧字节数；`0` 表示由 `cfg` 推导 |
+| `maxFrames` | int | `0` | `--max-frames` | 采集上限；`0` 表示直到 Ctrl-C |
+| `noControl` | bool | `false` | `--no-control` | `true` = 被动模式，只收包不控制设备（该命令行选项只能置真） |
+
+约定与报错：
+
+- JSON 文件路径、以及文件内的所有路径，都按**当前工作目录**解析（与命令行一致）；
+- 不支持 JSON 注释；**未知字段直接报错**（避免拼写错误被静默忽略成默认值），
+  例如 `capture.maxframe: unknown key "capture.maxframe"`；
+- 类型不匹配会指出字段与期望/实际类型，例如
+  `capture.dataPort: expected an integer, got string`；
+- 文件缺失/不可读/语法错误会带上路径与行列，例如
+  `cfg.json: unexpected end of input (line 4, column 1)`；
+- 同一字段同时出现在命令行与 JSON 时以命令行优先；两者都未给出的用默认值；
+- 只写需要覆盖的字段即可，最小可用配置：
+
+  ```json
+  { "capture": { "output": "captures/adc.bin", "cfg": "awr1843.cfg",
+                 "serial": "/dev/ttyACM0", "bindIp": "192.168.33.30" } }
+  ```
+
+仓库根目录提供完整示例 `capture.example.json`，可直接复制修改。
+离线回放验收（第 2 节）同样适用，例如：
+
+```bash
+cat > replay.json <<'EOF'
+{ "capture": { "output": "replay_capture.bin", "noControl": true,
+               "frameBytes": 262144, "maxFrames": 2, "bindIp": "127.0.0.1" } }
+EOF
+./build/radar_capture --json replay.json
+```
 
 ## 4. 原始数据与完整性验收
 
@@ -236,3 +337,8 @@ warning，完整帧、`stats.txt` 与退出码不受影响。
 
 验收结论：`savedFrames=1000`、`missingPackets=0`、`latePackets=0`、
 `malformedPackets=0`、`discardedFrames=0`，线上帧号 0..999 连续，退出码 0。
+
+功能新增：入口参数支持 JSON 配置文件（`--json`，命令行方式保持兼容；字段表、
+优先级与报错约定见 3.1），实现位于 `src/core/Json.{h,cpp}`（零依赖 JSON 解析）
+与 `src/core/CaptureConfig.{h,cpp}`（默认值 / JSON / 命令行三级合并 + 校验），
+单测 `radar_config_tests`。
