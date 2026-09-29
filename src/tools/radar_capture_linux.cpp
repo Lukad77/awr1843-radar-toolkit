@@ -23,21 +23,12 @@
 #include <sstream>
 #include <vector>
 
+#include "core/CaptureConfig.h"
 #include "transport/Dca1000Reassembler.h"
 
 namespace {
 volatile std::sig_atomic_t stopping = 0;
 void onSignal(int) { stopping = 1; }
-
-struct Options {
-  std::string bindIp = "0.0.0.0", dcaIp = "192.168.33.180";
-  std::string serial, cfg, output;
-  int dataPort = 4098, configPort = 4096, packetDelayUs = 25;
-  int lvdsLanes = 4, rcvbuf = 8 * 1024 * 1024;
-  std::size_t frameBytes = 0;
-  std::uint64_t maxFrames = 0;
-  bool noControl = false;
-};
 
 struct Fd {
   int value = -1;
@@ -66,37 +57,19 @@ void put16(std::vector<std::uint8_t> &v, std::uint16_t x) {
   v.push_back(static_cast<std::uint8_t>(x >> 8));
 }
 
-Options parseArgs(int argc, char **argv) {
-  Options o;
-  for (int i = 1; i < argc; ++i) {
-    const std::string key = argv[i];
-    if (key == "--no-control") { o.noControl = true; continue; }
-    if (i + 1 == argc) throw std::runtime_error("missing value for " + key);
-    const std::string val = argv[++i];
-    if (key == "--output") o.output = val;
-    else if (key == "--cfg") o.cfg = val;
-    else if (key == "--serial") o.serial = val;
-    else if (key == "--bind-ip") o.bindIp = val;
-    else if (key == "--dca-ip") o.dcaIp = val;
-    else if (key == "--data-port") o.dataPort = std::stoi(val);
-    else if (key == "--config-port") o.configPort = std::stoi(val);
-    else if (key == "--packet-delay-us") o.packetDelayUs = std::stoi(val);
-    else if (key == "--lvds-lanes") o.lvdsLanes = std::stoi(val);
-    else if (key == "--rcvbuf") o.rcvbuf = std::stoi(val);
-    else if (key == "--frame-bytes") o.frameBytes = std::stoull(val);
-    else if (key == "--max-frames") o.maxFrames = std::stoull(val);
-    else throw std::runtime_error("unknown option " + key);
-  }
-  if (o.output.empty()) throw std::runtime_error("--output is required");
-  if (!o.noControl && (o.cfg.empty() || o.serial.empty()))
-    throw std::runtime_error("hardware mode requires --cfg and --serial");
-  if (o.noControl && !o.frameBytes && o.cfg.empty())
-    throw std::runtime_error("passive mode requires --frame-bytes or --cfg");
-  if (o.dataPort < 1 || o.dataPort > 65535 || o.configPort < 1 || o.configPort > 65535 ||
-      o.packetDelayUs < 5 || o.packetDelayUs > 500 ||
-      (o.lvdsLanes != 2 && o.lvdsLanes != 4) || o.rcvbuf < 65536)
-    throw std::runtime_error("invalid port, packet delay, LVDS lanes or receive buffer");
-  return o;
+// 参数来源合并：默认配置 -> JSON 文件 -> 命令行，后者优先。任何一步失败都
+// 把可直接展示的原因写入 `err`（含 JSON 字段名或命令行选项名）。
+bool resolveConfig(int argc, char **argv, radar::CaptureConfig &cfg,
+                   radar::CliOverrides &cli, std::string &err) {
+  if (!radar::parseCli(argc, argv, cli, err)) return false;
+  radar::CaptureConfig merged; // 默认配置（字段未指定时保持默认值）
+  if (!cli.jsonPath.empty() &&
+      !radar::loadCaptureConfigFile(cli.jsonPath, merged, err))
+    return false;
+  if (!radar::applyCliOverrides(cli, merged, err)) return false;
+  if (!radar::validateCaptureConfig(merged, err)) return false;
+  cfg = std::move(merged);
+  return true;
 }
 
 // Only the supported single-TX, complex 16-bit raw ADC profile is accepted.
@@ -266,20 +239,28 @@ CaptureStop::~CaptureStop() {
 
 int main(int argc, char **argv) {
   try {
-    const Options o = parseArgs(argc, argv);
+    radar::CliOverrides cli;
+    radar::CaptureConfig cfg;
+    std::string configErr;
+    if (!resolveConfig(argc, argv, cfg, cli, configErr))
+      throw std::runtime_error(configErr);
+    // 把参数来源显式打出来，便于确认「命令行 > JSON > 默认值」的实际生效情况。
+    std::cout << "config: json=" << (cli.jsonPath.empty() ? "<none>" : cli.jsonPath)
+              << " cliOverrides=" << cli.values.size() << '\n';
+
     std::vector<std::string> cfgCommands;
-    const std::size_t cfgBytes = o.cfg.empty() ? 0 : cfgFrameBytes(o.cfg, cfgCommands);
-    if (o.frameBytes && cfgBytes && o.frameBytes != cfgBytes)
-      throw std::runtime_error("--frame-bytes disagrees with radar cfg");
-    const std::size_t frameBytes = cfgBytes ? cfgBytes : o.frameBytes;
-    std::ofstream raw(o.output, std::ios::binary | std::ios::trunc);
-    std::ofstream index(o.output + ".frames.csv", std::ios::trunc);
+    const std::size_t cfgBytes = cfg.cfg.empty() ? 0 : cfgFrameBytes(cfg.cfg, cfgCommands);
+    if (cfg.frameBytes && cfgBytes && cfg.frameBytes != cfgBytes)
+      throw std::runtime_error("frameBytes disagrees with the radar cfg frame size");
+    const std::size_t frameBytes = cfgBytes ? cfgBytes : cfg.frameBytes;
+    std::ofstream raw(cfg.output, std::ios::binary | std::ios::trunc);
+    std::ofstream index(cfg.output + ".frames.csv", std::ios::trunc);
     if (!raw || !index) throw std::runtime_error("cannot create output files");
     index << "file_frame,wire_frame\n";
     Fd data(::socket(AF_INET, SOCK_DGRAM, 0));
     if (data.value < 0) throw std::runtime_error("data socket failed");
-    ::setsockopt(data.value, SOL_SOCKET, SO_RCVBUF, &o.rcvbuf, sizeof(o.rcvbuf));
-    const auto bindAddr = address(o.bindIp, o.dataPort);
+    ::setsockopt(data.value, SOL_SOCKET, SO_RCVBUF, &cfg.rcvbuf, sizeof(cfg.rcvbuf));
+    const auto bindAddr = address(cfg.bindIp, cfg.dataPort);
     if (::bind(data.value, reinterpret_cast<const sockaddr *>(&bindAddr), sizeof(bindAddr)))
       throw std::runtime_error("data port bind failed: " + std::string(std::strerror(errno)));
     int actualBuf = 0; socklen_t len = sizeof(actualBuf);
@@ -289,26 +270,26 @@ int main(int argc, char **argv) {
     Fd ctrl, serial;
     sockaddr_in dca{};
     CaptureStop cleanup;
-    if (!o.noControl) {
+    if (!cfg.noControl) {
       ctrl.value = ::socket(AF_INET, SOCK_DGRAM, 0);
       if (ctrl.value < 0) throw std::runtime_error("command socket failed");
       timeval timeout{2, 0};
       ::setsockopt(ctrl.value, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-      const auto local = address(o.bindIp, o.configPort);
+      const auto local = address(cfg.bindIp, cfg.configPort);
       if (::bind(ctrl.value, reinterpret_cast<const sockaddr *>(&local), sizeof(local)))
         throw std::runtime_error("config port bind failed");
-      dca = address(o.dcaIp, o.configPort);
+      dca = address(cfg.dcaIp, cfg.configPort);
       cleanup.ctrl = ctrl.value; cleanup.dca = dca;
       // The XDS110 re-enumerates on reset/power-cycle, so the port can be
       // briefly absent right when the tool starts. Retry instead of failing.
       constexpr int kSerialOpenAttempts = 10;
       for (int attempt = 1; attempt <= kSerialOpenAttempts; ++attempt) {
-        serial.value = ::open(o.serial.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
+        serial.value = ::open(cfg.serial.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
         if (serial.value >= 0) break;
         if (attempt == kSerialOpenAttempts)
-          throw std::runtime_error("cannot open serial: " + o.serial + ": " +
+          throw std::runtime_error("cannot open serial: " + cfg.serial + ": " +
                                    std::strerror(errno));
-        std::cerr << "serial " << o.serial << " not ready ("
+        std::cerr << "serial " << cfg.serial << " not ready ("
                   << std::strerror(errno) << "), retrying...\n";
         ::usleep(500000); // 0.5 s, ~5 s total
       }
@@ -321,11 +302,11 @@ int main(int argc, char **argv) {
       if (::tcsetattr(serial.value, TCSANOW, &tty)) throw std::runtime_error("tcsetattr failed");
       ::tcflush(serial.value, TCIFLUSH);
       command(ctrl.value, dca, 0x09); // connectivity
-      std::vector<std::uint8_t> fpga{1, static_cast<std::uint8_t>(o.lvdsLanes == 4 ? 1 : 2),
+      std::vector<std::uint8_t> fpga{1, static_cast<std::uint8_t>(cfg.lvdsLanes == 4 ? 1 : 2),
                                      1, 2, 3, 30};
       command(ctrl.value, dca, 0x03, fpga); // raw, LVDS, Ethernet, 16-bit
       std::vector<std::uint8_t> packet;
-      put16(packet, 1472); put16(packet, static_cast<std::uint16_t>(o.packetDelayUs));
+      put16(packet, 1472); put16(packet, static_cast<std::uint16_t>(cfg.packetDelayUs));
       put16(packet, 0);
       command(ctrl.value, dca, 0x0B, packet);
       // A silent CLI is not a transient condition: after a capture the mmWave
@@ -366,7 +347,7 @@ int main(int argc, char **argv) {
         return true;
       });
     std::uint8_t packet[65536];
-    while (!stopping && (!o.maxFrames || saved < o.maxFrames)) {
+    while (!stopping && (!cfg.maxFrames || saved < cfg.maxFrames)) {
       pollfd p{data.value, POLLIN, 0};
       const int ready = ::poll(&p, 1, 200);
       if (ready < 0 && errno == EINTR) continue;
@@ -377,7 +358,7 @@ int main(int argc, char **argv) {
                                    reinterpret_cast<sockaddr *>(&from), &fromLen);
       if (n < 0 && errno == EINTR) continue;
       if (n < 0) throw std::runtime_error("data receive failed");
-      if (!o.noControl && from.sin_addr.s_addr != dca.sin_addr.s_addr) continue;
+      if (!cfg.noControl && from.sin_addr.s_addr != dca.sin_addr.s_addr) continue;
       reassembler.consume(packet, static_cast<std::size_t>(n));
       if (saved && saved % 100 == 0 && saved != lastReported) {
         lastReported = saved;
@@ -418,7 +399,7 @@ int main(int argc, char **argv) {
       }
     }
     raw.flush(); index.flush();
-    std::ofstream stats(o.output + ".stats.txt", std::ios::trunc);
+    std::ofstream stats(cfg.output + ".stats.txt", std::ios::trunc);
     stats << "savedFrames=" << saved << '\n'
           << "frameBytes=" << frameBytes << '\n'
           << "missingPackets=" << reassembler.missingPackets() << '\n'
