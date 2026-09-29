@@ -56,13 +56,18 @@ cmp replay_input.bin replay_capture.bin && cat replay_capture.bin.stats.txt
 ### C. 真机采集（AWR1843 + DCA1000 + Jetson）
 
 ```bash
-# 按实际网络/串口修改 capture.example.json 后：
+# 只落盘（最省 CPU/内存）：按实际网络/串口修改 capture.example.json 后
 ./build/radar_capture --json capture.example.json
+
+# 采集 + 网页实时显示（需 -DRADAR_BUILD_WEB=ON）；
+# 另开浏览器打开 web/index.html（端口非默认时加 ?port=<port>）
+./build/radar_capture_web --json capture.example.json
 ```
 
 真机前置条件（网段、串口设备名与权限、DCA1000 IP、验收标准）见
 [Jetson Nano 采集验收](docs/JETSON_NANO_ACCEPTANCE.md)，参数含义见其
-[JSON 配置方式](docs/JETSON_NANO_ACCEPTANCE.md#31-json-配置方式推荐)一节。
+[JSON 配置方式](docs/JETSON_NANO_ACCEPTANCE.md#31-json-配置方式推荐)一节，
+网页侧的启动与验证见[采集 + 网页实时显示](docs/JETSON_NANO_ACCEPTANCE.md#32-采集--网页实时显示radar_capture_web)。
 
 ## 项目简介
 
@@ -90,7 +95,7 @@ cmp replay_input.bin replay_capture.bin && cat replay_capture.bin.stats.txt
 - **保序管道执行**：`Pipeline` 单工作线程FIFO消费，输出顺序==提交顺序，无需重排序
 - **连续内存解析**：`ParseStage` 替代传统 `DataParser`，写入单一连续分配，无内部互斥锁
 - **接口驱动可扩展**：`IFrameSource/IStage/IResultSink/IInferenceEngine` 接口支持依赖倒置，新增处理阶段仅需实现 `IStage`
-- **自动化测试**：6 个测试套件（含新增的采集入口配置单测），`ctest` 100% 通过，全部无硬件依赖可在 CI 运行
+- **自动化测试**：9 个测试套件（含采集入口配置、传输层与真机 UDP 源单测），`ctest` 100% 通过，全部无硬件依赖可在 CI 运行
 
 ### DSP 算子层（Phase 4，src/dsp/）
 
@@ -195,8 +200,8 @@ awr1843-radar-toolkit/
 │   ├── pipeline/            管道层：保序无损执行器、Parse 阶段
 │   ├── dsp/                 算子层：Range/Doppler/Angle FFT、CA-CFAR、MTI、相位解缠
 │   ├── web/                 Web 旁路：wire 协议 + WebSocket 扇出 sink
-│   ├── tools/               可执行入口：radar_capture / radar_dsp_demo / radar_web_demo
-│   └── tests/               单元测试（6 个套件，全部无硬件依赖）
+│   ├── tools/               可执行入口：radar_capture(_web) / radar_dsp_demo / radar_web_demo
+│   └── tests/               单元测试（9 个套件，全部无硬件依赖）
 ├── docs/                    深度文档
 │   ├── JETSON_NANO_ACCEPTANCE.md   真机采集前置条件、步骤、验收标准与排查
 │   └── ARCHITECTURE_EVOLUTION.md   新架构重构的阶段总结与设计取舍
@@ -205,6 +210,7 @@ awr1843-radar-toolkit/
 ├── awr1843.cfg              示例 mmWave CLI profile（单 TX / 16 位复数 ADC / LVDS 无头）
 ├── capture.example.json     radar_capture 的 JSON 配置示例
 ├── dca1000_replay_pump.py   把离线 bin 按线上包格式重放（无硬件验收用）
+├── ws_probe.py              headless 下验证网页实时显示链路的 WebSocket 探针
 ├── LICENSE                  MIT 许可证
 └── CMakeLists.txt           全部可执行目标与 ctest 注册
 ```
@@ -348,25 +354,36 @@ CMake 定义了以下可执行目标（`radar_web_*` 可选：`-DRADAR_BUILD_WEB
 | `radar_spool_tests` | 两级无损FrameSpool单测（RAM→磁盘溢写FIFO保序） | 无 |
 | `radar_capture_tests` | DCA1000 wire 重组单测（跨包帧/序号回绕/缺口丢弃/迟到包/畸形包） | 无 |
 | `radar_config_tests` | 采集入口配置单测（JSON 解析 + 默认值/JSON/命令行三级合并 + 字段校验） | 无 |
+| `radar_transport_tests` | 传输层单测（`.cfg` → RadarConfig/命令序列的解析与拒绝规则、原始帧落盘 sink） | 无 |
+| `radar_source_tests` | `IFrameSource` 真机 UDP 源单测（localhost 注入线上包；Linux） | 无 |
 | `radar_dsp_tests` | DSP算子单测（FFT对拍朴素DFT、Range/Doppler峰值定位、CFAR检测/虚警、Angle导向矢量、MTI、相位解缠、全链过Pipeline回压保序） | 无 |
 | `radar_dsp_demo` | 真实数据集端到端 DSP 链 demo（逐 stage 耗时/检测摘要/相位 CSV） | 无 |
-| `radar_capture` | Linux 专用实时采集入口（JSON 配置或命令行，见 Jetson 采集验收） | AWR1843 + DCA1000 |
+| `radar_capture` | Linux 专用实时采集入口，只落盘（JSON 配置或命令行，见 Jetson 采集验收） | AWR1843 + DCA1000 |
+| `radar_capture_web` | 真机采集 + DSP 流水线 + 落盘 + 网页实时显示（需 `RADAR_BUILD_WEB=ON`） | AWR1843 + DCA1000 |
 | `radar_web_demo` | 离线回放 + WebSocket 实时推送（浏览器实时显示，可选 target） | 无 |
 | `radar_web_tests` | Web wire 协议单测（编码布局回读对拍，仅 RADAR_BUILD_WEB=ON 时注册） | 无 |
 
 ## 使用说明
 
-三种运行形态，按是否需要硬件区分：
+四种运行形态，按是否需要硬件区分：
 
 | 形态 | 入口 | 硬件 |
 |------|------|------|
-| 真机采集（Linux / Jetson） | `radar_capture --json capture.example.json` | AWR1843 + DCA1000 |
+| 真机采集（只落盘） | `radar_capture --json capture.example.json` | AWR1843 + DCA1000 |
+| 真机采集 + 网页实时显示 | `radar_capture_web --json capture.example.json` | AWR1843 + DCA1000 |
 | DSP 端到端处理 | `radar_dsp_demo <adc_raw.bin> [maxFrames] [phase.csv]` | 无 |
-| Web 实时显示 | `radar_web_demo <adc_raw.bin> [port] [--loop]` | 无 |
+| 网页实时显示（离线回放） | `radar_web_demo <adc_raw.bin> [port] [--loop]` | 无 |
 
-> 注意：`radar_capture` 目前是**独立入口**——采集后直接落盘，不经过 `Pipeline`。
-> 要把它接进流水线需要实现 `IFrameSource`（`Dca1000UdpSource`），该项尚未开始，
-> 详见[已知问题与状态](#已知问题与状态)。
+两个真机入口共用控制面（`Dca1000Control`：DCA1000 命令链 + 雷达串口时序）与同一套
+参数（`CaptureConfig`，JSON/命令行），区别只在数据面：
+
+- `radar_capture`：收包 → 帧重组 → **直接落盘**（不经流水线，最省 CPU/内存）；
+- `radar_capture_web`：`Dca1000UdpSource`（IFrameSource）→ 真实 `Pipeline`（7 个
+  stage）→ 扇出到 **`RawFileSink`（无损落盘）+ `WsFrameSink`（网页实时显示）**。
+  网页端慢只会丢显示帧，落盘永不丢；两级 `FrameSpool` 用磁盘容量吸收突发。
+
+`radar_capture_web` 与 `radar_web_demo` 需要 `-DRADAR_BUILD_WEB=ON`（默认 ON；
+若按验收文档第 1 节配置了 OFF，则不会构建，见「构建目标说明」）。
 
 ### 真机采集（Linux / Jetson）
 
@@ -466,6 +483,10 @@ DCA1000 采集卡工作参数示例（`dataLoggingMode`/`lvdsMode` 等为设备�
 | `src/core/CaptureConfig.h/.cpp` | 采集入口配置：默认值 + JSON 合并 + 命令行覆盖（命令行 > JSON > 默认值）+ 字段校验 |
 | `src/transport/FrameSpool.h/.cpp` | 两级无损FIFO（RAM环+磁盘溢写），确保零丢包 |
 | `src/transport/Dca1000Reassembler.h/.cpp` | DCA1000 wire 重组（48 位 byte count + seqNum），只输出完整帧 |
+| `src/transport/MmwaveCfg.h/.cpp` | 解析 mmWave CLI `.cfg` → `RadarConfig` + 可下发命令序列（单 TX/复数 16bit/LVDS 无头校验） |
+| `src/transport/Dca1000Control.h/.cpp` | DCA1000 命令链（0x09/0x03/0x0B/0x05/0x06）+ 雷达串口 CLI 时序；两个采集入口共用（仅 Linux） |
+| `src/transport/Dca1000UdpSource.h/.cpp` | `IFrameSource` 真机 UDP 源：rx 线程→帧重组→`FrameSpool`→`next()`（仅 Linux） |
+| `src/transport/RawFileSink.h/.cpp` | `IResultSink`：原始帧无损落盘（`<out>` + `.frames.csv` + `.stats.txt`） |
 | `src/pipeline/Pipeline.h/.cpp` | 保序无损管道执行器，单工作线程FIFO消费 |
 | `src/pipeline/ParseStage.h/.cpp` | I/Q解交织管道阶段，替代DataParser，连续内存无mutex |
 | `src/dsp/Fft.h/.cpp` | 自研 radix-2 FFT（FftPlan/fftshift/Hann窗），零外部依赖 |
@@ -481,13 +502,16 @@ DCA1000 采集卡工作参数示例（`dataLoggingMode`/`lvdsMode` 等为设备�
 | `src/web/WireProtocol.h` | WebSocket 二进制 wire 协议（每帧一条消息编码 + 接入时 meta JSON 下发） |
 | `src/web/WsFrameSink.h/.cpp` | IResultSink：帧编码入队 + 专用发送线程广播，慢客户端丢帧计数、绝不阻塞 DSP worker |
 | `src/tools/radar_web_demo.cpp` | 离线回放 + WebSocket 实时推送 demo（真实 Pipeline 全链 + WsFrameSink，定时 submit 模拟实盘节拍） |
-| `src/tools/radar_capture_linux.cpp` | Linux 专用 DCA1000 采集入口（JSON/命令行配置、雷达串口问答、帧重组落盘、DCA1000 控制） |
+| `src/tools/radar_capture_linux.cpp` | Linux 采集入口（只落盘）：JSON/命令行配置 + `Dca1000Control` 控制 + 帧重组直接写文件 |
+| `src/tools/radar_capture_web_linux.cpp` | 真机采集 + DSP 流水线 + 落盘 + 网页实时显示入口（`Dca1000UdpSource` → Pipeline → 两个 sink） |
 | `src/tests/test_core.cpp` | 基础组件单测（SeqNum/SpscRing/FrameBuffer/BufferPool/RadarConfig） |
 | `src/tests/test_pipeline.cpp` | 流水线单测（ParseStage + Pipeline保序无损） |
 | `src/tests/test_spool.cpp` | FrameSpool单测（两级缓冲FIFO保序与溢写验证） |
 | `src/tests/test_dsp.cpp` | DSP算子单测（全合成信号对拍，含平台复现/修复对拍、全链集成） |
 | `src/tests/test_capture.cpp` | DCA1000 wire 重组单测（跨包帧/序号回绕/缺口丢弃/迟到包/畸形包） |
 | `src/tests/test_config.cpp` | 采集入口配置单测（JSON 解析/三级合并/类型与格式报错/字段校验） |
+| `src/tests/test_transport.cpp` | 传输层单测（`.cfg` 解析与拒绝规则、原始帧落盘 sink 的字节与统计） |
+| `src/tests/test_source.cpp` | `IFrameSource` 真机 UDP 源单测（localhost 注入线上包、缺口丢弃、溢写、停机排空） |
 | `src/tests/test_web.cpp` | Web wire 协议单测（编码布局回读对拍） |
 | `web/index.html` + `web/app.js` | 零构建工具链浏览器前端（uPlot 图表 + 呼吸 biquad 带通 / Goertzel 呼吸率） |
 | `third_party/ixwebsocket/` | vendored IXWebSocket 依赖（可选，Web target 使用，USE_TLS/USE_ZLIB 关闭） |
@@ -498,7 +522,8 @@ DCA1000 采集卡工作参数示例（`dataLoggingMode`/`lvdsMode` 等为设备�
 |------|------|
 | `capture.example.json` | `radar_capture` 的 JSON 配置示例（`--json capture.example.json`；字段表见 Jetson 采集验收 3.1） |
 | `awr1843.cfg` | 示例 mmWave CLI 配置（单 TX、16 位复数 ADC、`lvdsStreamCfg` 无头原始 ADC） |
-| `dca1000_replay_pump.py` | DCA1000 UDP 回放泵：把离线 bin 按线上包格式重放至 UDP 端口（供未来 `Dca1000UdpSource` 联调与回放验证） |
+| `dca1000_replay_pump.py` | DCA1000 UDP 回放泵：把离线 bin 按线上包格式重放至 UDP 端口（`radar_capture(_web)` 无硬件验收用） |
+| `ws_probe.py` | 最小 WebSocket 探针：headless 下验证实时显示链路（打印 meta JSON 与 wire 协议帧头），仅标准库 |
 | `diagnose_phase.py` | 相位机理诊断（峰值 bin 轨迹/幅度塌陷分析）与修复前后对比绘图（`--plot`） |
 
 ## 数据格式说明
@@ -517,7 +542,7 @@ DCA1000 采集卡工作参数示例（`dataLoggingMode`/`lvdsMode` 等为设备�
 | **PhaseUnwrapStage 相位提取（已收敛）** | ✅ 已修复 | 根因：ParseStage I/Q 配对错误使目标能量落入镜像 bin（正/镜像幅度比 1:54），相位跟踪采到噪声裙边；已修正配对（对齐 MATLAB）并把解缠核心重构为 chirp 相干平均 + 邻域加权帧相量。真实数据 2000 帧复核：>1 rad 解缠跳变降至 0、位移曲线 mm 级物理合理。遗留：① 相位→位移换算用 `lambdaM = c/startFreq`（起始频率，与中心频率差 ~1%）；② 20fps 帧率下跨帧间隙 ≈40ms、快速体动欠采样（容忍径向速度 ~24mm/s，需提高帧率）；trackAmp 质量位可标记不可靠段但不能修复 |
 | **bin 0 近场泄漏残留** | 已定位未修复 | MTI 只能消零多普勒分量，天线耦合泄漏受相噪调制落在 ±1 doppler bin（实测 44.9dB）；需要 CFAR 增加 minRangeBin 距离门控 |
 | **TDM-MIMO（多Tx）不支持** | 设计留接缝 | AngleFftStage 仅 1Tx 直通；多 Tx 需多普勒相位补偿后虚拟阵列才相干 |
-| **IFrameSource 无实现** | 未开始 | 实时 UDP 采集已由 Linux 独立入口 `radar_capture` 实现（收包→重组→落盘），但**未接入 `Pipeline`**，也没有文件回放 `IFrameSource`；`radar_dsp_demo`/`radar_web_demo` 均以手动循环 + 定时 `submit()` 驱动真实 Pipeline（后者按 `cfg.framePeriodicityMs` 模拟实盘节拍） |
+| **`IFrameSource` 实时源** | ✅ 已实现（文件回放待做） | `transport/Dca1000UdpSource`：rx 线程收包 → 帧重组 → `FrameSpool` 两级无损缓冲 → `next()`，已由 `radar_capture_web` 接入真实 `Pipeline`。仍缺文件回放 `IFrameSource`（`FileReplaySource`），故 `radar_dsp_demo`/`radar_web_demo` 仍以手动循环 + 定时 `submit()` 驱动（后者按 `cfg.framePeriodicityMs` 模拟实盘节拍） |
 
 ## 常见问题排查
 
@@ -693,9 +718,9 @@ public:
 
 | 阶段 | 目标 | 关键组件 |
 |------|------|------|
-| Phase 2 后续 | 接入真实 UDP 源与文件回放 | `Dca1000UdpSource`、`FileReplaySource` |
-| Phase 0/1 收尾 | 配置外置（JSON）与日志系统接入 | `AppConfig`(JSON)、`Logger` |
-| Phase 3 后续 | WebSocket 实时显示旁路（RD 图/检测点/波形） | `WebSocketSink` + 前端 |
+| Phase 2 后续 | 接入真实 UDP 源与文件回放 | `Dca1000UdpSource` ✅（已接入 `radar_capture_web`）、`FileReplaySource`（待做） |
+| Phase 0/1 收尾 | 配置外置（JSON）与日志系统接入 | `CaptureConfig`(JSON) ✅（采集入口）、`Logger`（待做） |
+| Phase 3 后续 | WebSocket 实时显示旁路（RD 图/检测点/波形） | 波形/距离谱/相位/呼吸 ✅ 已接真机链路（`radar_capture_web`）；RD 图与 CFAR 检测点待上屏（`WireProtocol` 需扩展） |
 | Phase 4 收尾 | CFAR 距离门控、检测聚类/跟踪 | `minRangeBin`、DBSCAN/Kalman |
 | Phase 5 | NN 推理 | `InferenceStage`（ONNX Runtime） |
 | Phase 6 | 可观测性与优化 | `MetricsSink`（延迟/丢帧/队列水位/Spool 深度）、线程绑核、overload 告警 |

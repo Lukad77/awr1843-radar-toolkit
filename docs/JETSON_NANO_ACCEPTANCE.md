@@ -18,6 +18,7 @@ byte count 重组，只把完整 ADC 帧写入 `adc.bin`。同时生成
 | [2](#2-无硬件-udp-回放验收) | 无硬件 UDP 回放验收 | 没有硬件时先验证链路 |
 | [3](#3-dca1000-和-awr1843-控制验收) | DCA1000 和 AWR1843 控制验收 | 真机采集 |
 | [3.1](#31-json-配置方式推荐) | JSON 配置方式（推荐） | 想用配置文件管理参数 |
+| [3.2](#32-采集--网页实时显示radar_capture_web) | 采集 + 网页实时显示 | 想在浏览器里看实时波形 |
 | [4](#4-原始数据与完整性验收) | 原始数据与完整性验收 | 采集后核对零丢包 |
 | [5](#5-持续采集验收) | 持续采集验收 | 长跑压测 |
 | [6](#6-串口交互排查serial-timeout--radar-rejected) | 串口交互排查 | 串口报错时 |
@@ -35,7 +36,9 @@ ctest --test-dir build --output-on-failure
 ```
 
 验收：能生成 `build/radar_capture`，所有 CTest 项通过。若 Nano 的 CMake
-低于 3.10，先安装较新版本。建议先关闭 Web target，以便只检查采集链。
+低于 3.10，先安装较新版本。建议先关闭 Web target，以便只检查采集链；
+需要网页实时显示（`radar_capture_web`，见 3.2）时改用 `-DRADAR_BUILD_WEB=ON`
+重新配置（或用第二个 build 目录，避免影响这份精简构建）。
 
 ## 2. 无硬件 UDP 回放验收
 
@@ -141,6 +144,8 @@ JSON 结构（顶层对象只认 `capture` 节）：
 | `frameBytes` | int | `0` | `--frame-bytes` | 每帧字节数；`0` 表示由 `cfg` 推导 |
 | `maxFrames` | int | `0` | `--max-frames` | 采集上限；`0` 表示直到 Ctrl-C |
 | `noControl` | bool | `false` | `--no-control` | `true` = 被动模式，只收包不控制设备（该命令行选项只能置真） |
+| `webPort` | int | `8765` | `--web-port` | 仅 `radar_capture_web`：WebSocket 实时显示端口 |
+| `spoolFrames` | int | `64` | `--spool-frames` | 仅 `radar_capture_web`：两级无损缓冲的 RAM 环容量（单位帧，RAM 满则溢写磁盘） |
 
 约定与报错：
 
@@ -169,6 +174,53 @@ cat > replay.json <<'EOF'
 EOF
 ./build/radar_capture --json replay.json
 ```
+
+### 3.2 采集 + 网页实时显示（`radar_capture_web`）
+
+`radar_capture_web` 复用同一套控制时序（`Dca1000Control`），但数据面走
+`IFrameSource`（`Dca1000UdpSource`）+ 真实 `Pipeline`，同时**落盘**与**推送浏览器**：
+
+```bash
+./build/radar_capture_web --json capture.example.json
+# 另开浏览器打开 web/index.html（默认连 ws://localhost:8765）
+```
+
+- 需要 `-DRADAR_BUILD_WEB=ON`（CMake 默认 ON；若按第 1 节用 OFF 配置，则不会构建
+  本目标——那时用 `radar_capture` 只落盘即可）。
+- 新增两个参数（JSON 键 / 命令行）：`webPort`（默认 8765）/ `--web-port`；
+  `spoolFrames`（默认 64，两级无损缓冲第一级的 RAM 环容量）/ `--spool-frames`。
+- 产物与 `radar_capture` 一致（`<output>`、`.frames.csv`、`.stats.txt`），并额外写入
+  `framesReceived` / `spoolWriteFailures` / `spillPeakFrames`；`<output>.spill` 是溢写
+  文件，正常退出时自动删除。
+- **网页端慢只丢显示帧**（`WsFrameSink` 计数 `framesDropped`），落盘绝不丢帧；
+  两级 `FrameSpool` 用磁盘容量吸收突发，`spillPeakFrames > 0` 表示发生过溢写，
+  `spoolWriteFailures > 0` 才是真正的丢帧告警（磁盘写失败）。
+- 显示内容：原始 ADC 波形、距离谱（含跟踪 bin）、解缠相位/位移、呼吸波形与呼吸率；
+  RD 图与 CFAR 检测点尚未上屏（见 README 路线图）。
+- 两个入口共用同一份时序与参数，可先跑 `radar_capture` 验收采集链，再换
+  `radar_capture_web` 验收显示链。
+
+**无硬件验证整条链路**（被动模式 + 回放泵，提交前的推荐回归方式）：
+
+```bash
+cat > web.json <<'EOF'
+{ "capture": { "output": "captures/web_out.bin", "cfg": "awr1843.cfg",
+               "bindIp": "127.0.0.1", "noControl": true, "maxFrames": 20,
+               "webPort": 8793, "spoolFrames": 8 } }
+EOF
+./build/radar_capture_web --json web.json &     # 先起服务（它自己 bind 数据口）
+sleep 1
+python3 dca1000_replay_pump.py --bin replay_input.bin --host 127.0.0.1 \
+  --port 4098 --frame-bytes 262144 --fps 30 --max-frames 20
+cmp -n 5242880 replay_input.bin captures/web_out.bin   # 落盘必须逐字节一致
+cat captures/web_out.bin.stats.txt                     # 期望 missingPackets=0
+python3 ws_probe.py 127.0.0.1 8793 3                   # 应打印 meta + 3 条二进制帧
+```
+
+验收：`cmp` 无输出；`missingPackets=0`、`discardedFrames=0`、`spoolWriteFailures=0`；
+浏览器能画出实时曲线，或用仓库自带的 `ws_probe.py` 收到一次 meta JSON 与后续
+二进制帧（magic `0x31574452`，nWave/nBins 与 `.cfg` 一致）——headless 环境下
+这条比开浏览器方便。
 
 ## 4. 原始数据与完整性验收
 
@@ -342,3 +394,12 @@ warning，完整帧、`stats.txt` 与退出码不受影响。
 优先级与报错约定见 3.1），实现位于 `src/core/Json.{h,cpp}`（零依赖 JSON 解析）
 与 `src/core/CaptureConfig.{h,cpp}`（默认值 / JSON / 命令行三级合并 + 校验），
 单测 `radar_config_tests`。
+
+功能新增：真机 **实时显示入口 `radar_capture_web`**（见 3.2）——补齐了
+`IFrameSource` 的实时实现 `transport/Dca1000UdpSource`（socket 排空线程 → 帧重组
+→ `FrameSpool` 两级无损缓冲 → `next()`），并把它接进真实 `Pipeline`，扇出到
+`RawFileSink`（无损落盘）+ `WsFrameSink`（网页实时显示）。配套抽取了
+`transport/Dca1000Control`（DCA1000 命令链 + 雷达串口时序，两个采集入口共用）、
+`transport/MmwaveCfg`（`.cfg` → `RadarConfig` + 命令序列）、`transport/RawFileSink`，
+单测 `radar_transport_tests`、`radar_source_tests`（localhost 注入 UDP 包，无需硬件），
+配套 `ws_probe.py` 在 headless 环境验证网页链路。

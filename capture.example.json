@@ -11,7 +11,9 @@
     "lvdsLanes": 4,
     "rcvbuf": 16777216,
     "frameBytes": 0,
-    "maxFrames": 1000,
-    "noControl": false
+    "maxFrames": 2000,
+    "noControl": false,
+    "webPort": 8765,
+    "spoolFrames": 64
   }
 }
