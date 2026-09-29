@@ -381,3 +381,10 @@ data/
 *.csv
 diagnose_*.py
 plot_*.py
+
+# Radar capture artifacts (multi-hundred-MB binary recordings and sidecars)
+# radar_capture writes <output>, <output>.frames.csv (covered by *.csv) and
+# <output>.stats.txt; DCA1000 replay/monitor dumps are *.bin as well.
+/captures/
+*.bin
+*.stats.txt
