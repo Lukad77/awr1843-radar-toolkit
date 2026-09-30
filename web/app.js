@@ -110,9 +110,14 @@ const dark = { stroke: "#8b949e", grid: { stroke: "#21262d" }, ticks: { stroke: 
 function axes(xLabel, yLabel) {
   return [ { ...dark, label: xLabel }, { ...dark, label: yLabel } ];
 }
-function mkChart(el, title, series, xLabel, yLabel, w) {
+// uPlot 不做 CSS 自适应：画布尺寸只来自 opts.width/height，给 undefined 会让
+// canvas.width 变成 0 —— 图例照常显示、却一条曲线都画不出来。宽度必须实测容器。
+function containerWidth(el) {
+  return Math.max(360, el.parentElement.clientWidth - 8);
+}
+function mkChart(el, series, xLabel, yLabel, w) {
   const opts = {
-    width: w, height: 220,
+    width: w == null ? containerWidth(el) : w, height: 220,
     scales: { x: { time: false } },
     axes: axes(xLabel, yLabel),
     series: [{}, ...series],
@@ -123,27 +128,25 @@ function mkChart(el, title, series, xLabel, yLabel, w) {
 }
 
 let chAdc = null, chRange = null, chPhase = null, chBreath = null;
-function cardWidth() {
-  return Math.max(360, $("chart-adc").parentElement.clientWidth - 8);
-}
 function initCharts() {
-  const w = cardWidth();
-  chAdc = mkChart($("chart-adc"), "adc",
+  chAdc = mkChart($("chart-adc"),
     [ { label: "I", stroke: "#58a6ff", width: 1 },
       { label: "Q", stroke: "#f778ba", width: 1 } ], "采样点", "ADC");
-  chRange = mkChart($("chart-range"), "range",
+  chRange = mkChart($("chart-range"),
     [ { label: "幅度 (dB)", stroke: "#3fb950", width: 1.2 },
       { label: "跟踪 bin", stroke: "#d29922", width: 1, points: { show: true, size: 6 }, paths: () => null } ],
     "距离 (m)", "dB");
-  chPhase = mkChart($("chart-phase"), "phase",
+  chPhase = mkChart($("chart-phase"),
     [ { label: "相位 (rad)", stroke: "#58a6ff", width: 1.2 },
       { label: "位移 (mm)", stroke: "#3fb950", width: 1.2, scale: "mm" } ],
     "时间 (s)", "rad"); // 位移挂独立 scale "mm"（uPlot 自动建 scale，仅曲线无轴）
-  chBreath = mkChart($("chart-breath"), "breath",
+  chBreath = mkChart($("chart-breath"),
     [ { label: "呼吸位移 (mm)", stroke: "#f85149", width: 1.4 } ], "时间 (s)", "mm");
+  // 单列布局（窄屏）下各卡片同宽，仍逐图按自身容器重算，避免再出现 0 宽画布。
   window.addEventListener("resize", () => {
-    const w2 = cardWidth();
-    for (const c of [chAdc, chRange, chPhase, chBreath]) c && c.setSize({ width: w2, height: 220 });
+    for (const [chart, id] of [[chAdc, "chart-adc"], [chRange, "chart-range"],
+                               [chPhase, "chart-phase"], [chBreath, "chart-breath"]])
+      if (chart) chart.setSize({ width: containerWidth($(id)), height: 220 });
   });
 }
 
