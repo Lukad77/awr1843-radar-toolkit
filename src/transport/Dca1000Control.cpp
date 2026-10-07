@@ -1,15 +1,19 @@
 #include "transport/Dca1000Control.h"
 
+#ifndef _WIN32
 #include <arpa/inet.h>
 #include <cerrno>
-#include <cstring>
 #include <fcntl.h>
 #include <poll.h>
-#include <stdexcept>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <termios.h>
 #include <unistd.h>
+#endif
+#include <chrono>
+#include <thread>
+#include <stdexcept>
+#include <cstring>
 
 #include <iostream>
 #include <utility>
@@ -33,6 +37,7 @@ sockaddr_in address(const std::string &ip, int port) {
   return a;
 }
 
+#ifndef _WIN32
 void writeAll(int fd, const std::string &s) {
   const char *p = s.data();
   std::size_t n = s.size();
@@ -44,6 +49,8 @@ void writeAll(int fd, const std::string &s) {
     n -= static_cast<std::size_t>(k);
   }
 }
+
+#endif
 
 std::string printable(const std::string &s) {
   if (s.empty()) return "<no reply>";
@@ -61,6 +68,7 @@ std::string printable(const std::string &s) {
 // Discard anything already pending on the port. The CLI prints its prompt as a
 // separate chunk after "Done", so without this the trailing prompt of one
 // command is mis-attributed to the reply of the next one.
+#ifndef _WIN32
 void drainInput(int fd, int quietMs) {
   for (;;) {
     pollfd p{fd, POLLIN, 0};
@@ -109,6 +117,39 @@ void serialCommand(int fd, const std::string &line, int timeoutMs = 3000) {
   ::usleep(20000);
 }
 
+#else
+void serialCommand(HANDLE fd, const std::string &line, int timeoutMs = 3000) {
+  if (fd == INVALID_HANDLE_VALUE) throw std::runtime_error("serial is not open");
+  PurgeComm(fd, PURGE_RXCLEAR);
+  const std::string command = line + "\n";
+  DWORD written = 0;
+  if (!WriteFile(fd, command.data(), static_cast<DWORD>(command.size()), &written, nullptr) || written != command.size())
+    throw std::runtime_error("serial write failed: " + line);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  auto last = std::chrono::steady_clock::now();
+  std::string reply;
+  bool ack = false;
+  while (std::chrono::steady_clock::now() < deadline) {
+    char buf[256]; DWORD n = 0;
+    if (!ReadFile(fd, buf, sizeof(buf), &n, nullptr)) throw std::runtime_error("serial read failed");
+    if (n) {
+      reply.append(buf, n); last = std::chrono::steady_clock::now();
+      if (reply.find("Error") != std::string::npos || reply.find("not recognized") != std::string::npos ||
+          reply.find("Unknown") != std::string::npos || reply.find("Invalid") != std::string::npos)
+        throw std::runtime_error("radar rejected " + line + ": " + printable(reply));
+      ack = reply.find("Done") != std::string::npos || reply.find("Ignored") != std::string::npos;
+      if (ack && reply.find(":/>") != std::string::npos) break;
+      if (reply.size() > 8192) throw std::runtime_error("serial reply too long");
+    } else {
+      if (ack && std::chrono::steady_clock::now() - last > std::chrono::milliseconds(150)) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+  if (!ack) throw std::runtime_error("serial timeout: " + line + " (" + printable(reply) + ")");
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+}
+#endif
+
 } // namespace
 
 bool resolveIpv4(const std::string &ip, int port, sockaddr_in &out,
@@ -144,9 +185,14 @@ Dca1000Control::~Dca1000Control() {
 
 void Dca1000Control::open() {
   ctrl_ = ::socket(AF_INET, SOCK_DGRAM, 0);
-  if (ctrl_ < 0) throw std::runtime_error("command socket failed");
+  if (ctrl_ == decltype(ctrl_)(-1)) throw std::runtime_error("command socket failed");
+#ifdef _WIN32
+  DWORD timeout = 2000;
+  ::setsockopt(ctrl_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout), sizeof(timeout));
+#else
   timeval timeout{2, 0};
   ::setsockopt(ctrl_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+#endif
   const auto local = address(o_.bindIp, o_.configPort);
   if (::bind(ctrl_, reinterpret_cast<const sockaddr *>(&local), sizeof(local)))
     throw std::runtime_error("config port bind failed");
@@ -154,6 +200,29 @@ void Dca1000Control::open() {
 
   if (o_.serial.empty()) return; // 只控制 DCA1000（不碰雷达串口）
 
+#ifdef _WIN32
+  const std::string name = "\\\\.\\" + o_.serial;
+  DWORD serialError = 0;
+  for (int i = 0; i < o_.serialOpenAttempts; ++i) {
+    serial_ = CreateFileA(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (hasSerial()) break;
+    serialError = GetLastError();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  }
+  if (!hasSerial()) throw std::runtime_error("cannot open serial: " + o_.serial + " (Win32 " + std::to_string(serialError) + ")");
+  DCB dcb{}; dcb.DCBlength = sizeof(dcb);
+  if (!GetCommState(serial_, &dcb)) throw std::runtime_error("GetCommState failed");
+  dcb.BaudRate = CBR_115200; dcb.ByteSize = 8; dcb.Parity = NOPARITY; dcb.StopBits = ONESTOPBIT;
+  dcb.fBinary = TRUE; dcb.fParity = FALSE;
+  dcb.fOutxCtsFlow = FALSE; dcb.fOutxDsrFlow = FALSE; dcb.fDsrSensitivity = FALSE;
+  dcb.fDtrControl = DTR_CONTROL_DISABLE; dcb.fRtsControl = RTS_CONTROL_DISABLE;
+  dcb.fOutX = FALSE; dcb.fInX = FALSE; dcb.fAbortOnError = FALSE;
+  COMMTIMEOUTS timeouts{}; timeouts.ReadIntervalTimeout = MAXDWORD;
+  timeouts.WriteTotalTimeoutConstant = 2000;
+  if (!SetCommState(serial_, &dcb) || !SetCommTimeouts(serial_, &timeouts))
+    throw std::runtime_error("serial configuration failed");
+  PurgeComm(serial_, PURGE_RXCLEAR | PURGE_TXCLEAR);
+#else
   // The XDS110 re-enumerates on reset/power-cycle, so the port can be
   // briefly absent right when the tool starts. Retry instead of failing.
   for (int attempt = 1; attempt <= o_.serialOpenAttempts; ++attempt) {
@@ -175,9 +244,14 @@ void Dca1000Control::open() {
   if (::tcsetattr(serial_, TCSANOW, &tty))
     throw std::runtime_error("tcsetattr failed");
   ::tcflush(serial_, TCIFLUSH);
+#endif
 }
 
 void Dca1000Control::close() {
+#ifdef _WIN32
+  if (ctrl_ != INVALID_SOCKET) { closesocket(ctrl_); ctrl_ = INVALID_SOCKET; }
+  if (hasSerial()) { CloseHandle(serial_); serial_ = INVALID_HANDLE_VALUE; }
+#else
   if (ctrl_ >= 0) {
     ::close(ctrl_);
     ctrl_ = -1;
@@ -186,6 +260,7 @@ void Dca1000Control::close() {
     ::close(serial_);
     serial_ = -1;
   }
+#endif
 }
 
 void Dca1000Control::sendCommand(std::uint16_t code,
@@ -196,15 +271,19 @@ void Dca1000Control::sendCommand(std::uint16_t code,
   put16(req, static_cast<std::uint16_t>(payload.size()));
   req.insert(req.end(), payload.begin(), payload.end());
   put16(req, 0xEEAA);
-  if (::sendto(ctrl_, req.data(), req.size(), 0,
+  if (::sendto(ctrl_, reinterpret_cast<const char *>(req.data()), static_cast<int>(req.size()), 0,
                reinterpret_cast<const sockaddr *>(&dca_),
-               sizeof(dca_)) != static_cast<ssize_t>(req.size()))
+               sizeof(dca_)) != static_cast<int>(req.size()))
     throw std::runtime_error("DCA command send failed");
   for (;;) {
     std::uint8_t resp[512];
     sockaddr_in from{};
+#ifdef _WIN32
+    int fromLen = sizeof(from);
+#else
     socklen_t fromLen = sizeof(from);
-    const ssize_t n = ::recvfrom(ctrl_, resp, sizeof(resp), 0,
+#endif
+    const auto n = ::recvfrom(ctrl_, reinterpret_cast<char *>(resp), sizeof(resp), 0,
                                  reinterpret_cast<sockaddr *>(&from), &fromLen);
     if (n < 0) throw std::runtime_error("DCA command timed out or recv failed");
     // DCA1000 may reply from UDP 1024 even when commands target UDP 4096.
@@ -230,14 +309,15 @@ void Dca1000Control::configureFpga() {
 void Dca1000Control::setPacketDelay() {
   std::vector<std::uint8_t> packet;
   put16(packet, 1472);
-  put16(packet, static_cast<std::uint16_t>(o_.packetDelayUs));
+  // DCA1000 wire delay is in 8 ns FPGA ticks, not microseconds (TI RF_API).
+  put16(packet, static_cast<std::uint16_t>(o_.packetDelayUs * 125));
   put16(packet, 0);
   sendCommand(0x0B, packet);
 }
 
 void Dca1000Control::startRecording() {
-  sendCommand(0x05);
   recording_ = true;
+  sendCommand(0x05);
 }
 
 void Dca1000Control::stopRecording() {
@@ -290,8 +370,8 @@ void Dca1000Control::sendCfgCommands(const std::vector<std::string> &commands) {
 }
 
 void Dca1000Control::radarStart() {
-  serialCommand(serial_, "sensorStart");
   radarStarted_ = true;
+  serialCommand(serial_, "sensorStart");
 }
 
 void Dca1000Control::shutdownQuietly() {

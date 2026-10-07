@@ -1,5 +1,27 @@
 # AWR1843-DCA1000 雷达数据采集与处理工具
 
+## Windows 雷达 + 呼吸带采集
+
+本分支 `feat/windows-radar-belt-capture` 支持 Windows 上的 AWR1843 + DCA1000 原始 ADC 采集，以及可选的 HKH-11C 呼吸带采集。通过本机网页选择雷达 `.cfg`、呼吸带串口和档位，控制开始与结束；未连接呼吸带时选择“仅雷达”即可采集 BIN。
+
+**准备环境：**Windows、Python 3.10+、CMake、C++17 编译器；雷达 XDS110 串口驱动和 DCA1000 网卡正常。双设备模式另需 CP210x 驱动与 pySerial。按设备管理器中的实际端口和网卡地址填写，不能默认沿用本机测试的 COM8、COM9、`192.168.33.30`。
+
+```powershell
+git clone --branch feat/windows-radar-belt-capture https://github.com/Lukad77/awr1843-radar-toolkit.git
+cd awr1843-radar-toolkit
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j 6
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r tools\capture_service\requirements.txt
+.\start-capture.ps1
+```
+
+打开 <http://127.0.0.1:8090/>，确认雷达 CFG、CLI 串口、本机雷达网卡与 DCA1000 地址；选择“仅雷达”或“雷达 + HKH-11C”。双设备模式还要选择当前 CP210x 串口及固定档位。点击“开始采集”，结束时点击“结束并保存”，等待页面显示“已完成”后再关闭服务。采集文件按会话保存在 `captures/`，包括 `radar.bin`、逐帧时间索引和统计；双设备模式再保存呼吸带原始字节、样本、事件与质量统计。默认雷达 CFG 为 50 Hz；20 Hz 配置见 `awr1843.windows.20hz.cfg`。
+
+启动脚本会优先使用项目 `.venv`。只使用雷达时可跳过虚拟环境和 pip 安装；呼吸带模式需要安装上述依赖。采集数据目录、构建产物和虚拟环境不会上传到仓库。
+
+命令、输出文件定义、丢包处理和时间戳限制详见 [Windows 采集说明](docs/WINDOWS_CAPTURE.md)。两路均记录同一主机的接收时间；尚未完成跨设备硬件延迟与漂移校准。
+
 > Jetson / Linux 实时采集分支 `jeston_dev`：新增 Linux 专用采集入口 `radar_capture`
 > （JSON 配置或命令行），真机采集步骤见 [Jetson Nano 采集验收](docs/JETSON_NANO_ACCEPTANCE.md)；
 > 从 ad-hoc 到「无损保序流水线」的重构背景见 [架构演进记录](docs/ARCHITECTURE_EVOLUTION.md)。
@@ -14,6 +36,7 @@
 | 了解目录结构与关键模块 | [项目结构](#项目结构) · [关键模块](#关键模块) |
 | 了解数据流与分层设计 | [系统架构](#系统架构) · [实时处理流水线](#实时处理流水线架构图) |
 | 在 Jetson + AWR1843 + DCA1000 上真机采集 | [docs/JETSON_NANO_ACCEPTANCE.md](docs/JETSON_NANO_ACCEPTANCE.md) |
+| 在 Windows 上采集雷达和呼吸带 | [Windows 雷达 + 呼吸带采集](#windows-雷达--呼吸带采集) · [详细说明](docs/WINDOWS_CAPTURE.md) |
 | 配置采集参数（JSON / 命令行） | [JSON 配置方式](docs/JETSON_NANO_ACCEPTANCE.md#31-json-配置方式推荐) · [capture.example.json](capture.example.json) |
 | 跑 DSP 处理链 / Web 实时显示 | [使用说明](#使用说明) |
 | 新增算子、数据源或推理后端 | [扩展开发指南](#后续扩展开发指南) · [数据处理流程](.qoder/repowiki/zh/content/数据处理流程扩展开发指南.md) · [实时显示](.qoder/repowiki/zh/content/实时显示扩展开发指南.md) |
@@ -31,7 +54,7 @@ cd awr1843-radar-toolkit
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-# 2) 单元测试：6 个套件，全部无硬件依赖，秒级完成
+# 2) CTest 单元测试（无需硬件）
 ctest --test-dir build --output-on-failure
 ```
 

@@ -1,6 +1,7 @@
 #include "transport/MmwaveCfg.h"
 
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -35,7 +36,7 @@ std::vector<std::string> tokenize(const std::string &line) {
 } // namespace
 
 bool loadMmwaveCfg(const std::string &path, MmwaveCfg &out, std::string &err) {
-  std::ifstream in(path);
+  std::ifstream in(std::filesystem::u8path(path));
   if (!in) {
     err = "cannot open radar cfg: " + path;
     return false;

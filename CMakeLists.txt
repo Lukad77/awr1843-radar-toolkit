@@ -20,6 +20,18 @@ find_package(Threads REQUIRED)
 #   跨线程严格 FIFO）、连续内存 FrameBuffer、BufferPool 复用、RadarConfig 派生/校验。
 # ==========================================================================
 set(NEWSRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+if(WIN32)
+    add_executable(radar_capture
+        ${NEWSRC_DIR}/tools/radar_capture_windows.cpp
+        ${NEWSRC_DIR}/core/CaptureConfig.cpp
+        ${NEWSRC_DIR}/core/Json.cpp
+        ${NEWSRC_DIR}/core/RadarConfig.cpp
+        ${NEWSRC_DIR}/transport/Dca1000Control.cpp
+        ${NEWSRC_DIR}/transport/Dca1000Reassembler.cpp
+        ${NEWSRC_DIR}/transport/MmwaveCfg.cpp)
+    target_include_directories(radar_capture PRIVATE ${NEWSRC_DIR})
+    target_link_libraries(radar_capture PRIVATE ws2_32 Threads::Threads)
+endif()
 add_executable(radar_core_tests
     ${NEWSRC_DIR}/tests/test_core.cpp
     ${NEWSRC_DIR}/core/RadarConfig.cpp
@@ -30,6 +42,17 @@ target_link_libraries(radar_core_tests PRIVATE Threads::Threads)
 
 enable_testing()
 add_test(NAME radar_core_tests COMMAND radar_core_tests)
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(radar_control_tests
+        ${NEWSRC_DIR}/tests/test_control.cpp
+        ${NEWSRC_DIR}/transport/Dca1000Control.cpp)
+    target_include_directories(radar_control_tests PRIVATE ${NEWSRC_DIR})
+    target_link_libraries(radar_control_tests PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(radar_control_tests PRIVATE ws2_32)
+    endif()
+    add_test(NAME radar_control_tests COMMAND radar_control_tests)
+endif()
 
 # ==========================================================================
 # target 4: radar_pipeline_tests —— Phase 3 流水线骨架单测（无硬件）

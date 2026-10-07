@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 
 namespace radar {
@@ -395,7 +396,7 @@ bool parseJson(const std::string &text, JsonValue &out, std::string &err) {
 }
 
 bool parseJsonFile(const std::string &path, JsonValue &out, std::string &err) {
-  std::ifstream in(path, std::ios::binary);
+  std::ifstream in(std::filesystem::u8path(path), std::ios::binary);
   if (!in) {
     err = "cannot open config file \"" + path + "\"";
     return false;

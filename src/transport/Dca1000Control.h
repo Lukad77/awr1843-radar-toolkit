@@ -1,8 +1,5 @@
 #pragma once
-#if !defined(__linux__)
-#error Dca1000Control is Linux-only (POSIX sockets + termios)
-#endif
-// Dca1000Control.h — DCA1000 命令链 + 雷达串口 CLI 的控制面（Linux）。
+// Dca1000Control.h — DCA1000 命令链 + 雷达串口 CLI 的控制面（Linux / Windows）。
 //
 // 这段时序原本内联在 radar_capture 的匿名命名空间里。为了让「纯采集落盘」
 // （radar_capture）与「采集 + 流水线 + 实时显示」（radar_capture_web）共用
@@ -15,7 +12,16 @@
 //         -> 逐条下发 .cfg 命令 -> 0x05 开始记录 -> sensorStart
 //   收尾：先 0x06 停记录，再 sensorStop（顺序原因见验收文档 6.1）
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#else
 #include <netinet/in.h>
+#endif
 
 #include <cstdint>
 #include <string>
@@ -50,7 +56,7 @@ public:
   Dca1000Control(const Dca1000Control &) = delete;
   Dca1000Control &operator=(const Dca1000Control &) = delete;
 
-  // 建命令 socket 并 bind；（配置了 serial 时）打开并配置串口。失败抛异常。
+  // Windows 调用方须先 WSAStartup；建命令 socket 并 bind；（配置了 serial 时）打开并配置串口。失败抛异常。
   void open();
   // 关闭 fd，幂等。不发送任何停止命令。
   void close();
@@ -63,7 +69,13 @@ public:
   void stopRecording();  // 0x06
 
   // ---- 雷达串口 CLI ----
-  bool hasSerial() const { return serial_ >= 0; }
+  bool hasSerial() const {
+#ifdef _WIN32
+    return serial_ != INVALID_HANDLE_VALUE;
+#else
+    return serial_ >= 0;
+#endif
+  }
   void sendSerial(const std::string &line, int timeoutMs = 3000);
   // 启动前：确保传感器处于停止态；重试 attempts 次仍无响应则抛异常。
   void stopRadarOrThrow(int attempts = 3, int timeoutMs = 5000);
@@ -86,8 +98,13 @@ private:
   bool tryStopRadar(int attempts, int timeoutMs);
 
   Dca1000LinkOptions o_;
+#ifdef _WIN32
+  SOCKET ctrl_ = INVALID_SOCKET;
+  HANDLE serial_ = INVALID_HANDLE_VALUE;
+#else
   int ctrl_ = -1;
   int serial_ = -1;
+#endif
   sockaddr_in dca_{};
   bool recording_ = false;
   bool radarStarted_ = false;

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>雷达同步采集</title><link rel="stylesheet" href="style.css"></head>
+<body><main><header><div><p class="eyebrow">AWR1843 · DCA1000 · WINDOWS</p><h1>雷达同步采集</h1><p>选择配置，开始一段新的采集。每次会话独立保存原始 BIN 和时间记录。</p></div><span id="state" class="badge">连接中</span></header>
+<section class="grid"><form id="form" class="card"><h2>采集设置</h2>
+<label>雷达 CFG 文件路径<input id="cfgPath" required placeholder="D:\radar\profile.cfg"></label>
+<div class="file-row"><label class="file-button">选择 CFG 文件<input type="file" id="cfgFile" accept=".cfg"></label><small>选择文件后保存副本；也可直接填写本机完整路径。</small></div>
+<div class="row"><label>CLI 串口<input id="serial" value="COM8" required></label><label>采集模式<select id="belt"><option value="">仅雷达（不需要呼吸带）</option></select></label></div>
+<p id="beltNote" class="hint">仅雷达模式无需连接呼吸带。</p>
+<div id="beltSettings" hidden>
+<div class="row"><label>呼吸带串口<select id="beltPort"><option value="">请选择已连接的 CP210x</option></select></label><label>固定幅度档位<select id="beltGain"><option value="3">3（已验证）</option><option value="1">1（已验证）</option></select></label></div>
+<button type="button" id="refreshPorts" class="secondary">刷新呼吸带串口</button>
+<p class="hint">开测后确认档位并保留 3 秒稳定段，再启动雷达；正式采集期间固定档位。请先确认佩戴松紧和量程。</p>
+</div>
+<div class="row"><label>本机雷达网卡 IP<input id="bindIp" value="192.168.33.30" required></label><label>DCA1000 IP<input id="dcaIp" value="192.168.33.180" required></label></div>
+<details><summary>采集参数</summary><div class="row"><label>数据端口<input type="number" id="dataPort" value="4098" min="1" max="65535"></label><label>命令端口<input type="number" id="configPort" value="4096" min="1" max="65535"></label></div>
+<div class="row"><label>发包间隔（μs）<input type="number" id="packetDelayUs" value="50" min="5" max="500"></label><label>LVDS 通道<select id="lvdsLanes"><option value="2">2（AWR1843）</option><option value="4">4</option></select></label></div>
+<label>帧数上限<input type="number" id="maxFrames" value="0" min="0" max="1000000000"></label><small>0：由网页结束；若 CFG 设置了有限帧数，则采满后自动结束。</small></details>
+<div class="actions"><button type="submit" id="start" disabled>开始采集</button><button type="button" id="stop" disabled>结束并保存</button></div>
+<p id="message" role="alert"></p></form>
+<aside class="card"><h2>当前会话</h2><div class="metrics"><div><strong id="frames">0</strong><span>已保存完整帧</span></div><div><strong id="size">0 MB</strong><span>原始 BIN</span></div></div>
+<p id="statusText">等待开始</p><h3>保存目录</h3><code id="directory">—</code><p class="hint">radar.bin · 帧接收时间戳 · CFG 快照 · 会话记录 · 完整性统计</p>
+<div class="quality"><span>丢失包 <b id="missing">—</b></span><span>丢弃帧 <b id="discarded">—</b></span></div>
+<div id="beltStatus" hidden><h3>HKH-11C 呼吸带</h3><p id="beltSummary">等待连接</p><div class="quality"><span>正式段端点 <b id="beltRails">—</b></span><span>超量程 <b id="beltRange">—</b></span><span>坏校验 <b id="beltChecks">—</b></span></div><p id="beltQuality" class="hint"></p></div>
+<p class="hint">两路记录共同主机接收时间，呼吸带不提供设备时钟或采样序号；跨设备延迟仍需校准。</p></aside></section>
+<section class="card logs"><h2>设备日志</h2><pre id="logs" aria-live="polite">等待连接…</pre></section>
+<footer>当前页面控制真实硬件采集。不会使用合成回放数据代替真机数据。</footer>
+</main><script src="app.js"></script></body></html>
