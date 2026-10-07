@@ -145,6 +145,7 @@ class Hkh11cDevice:
                         self._check()
                     if self.port.write(raw) != len(raw):
                         raise RuntimeError('呼吸带串口未完整发送命令。')
+                    self._event('command_tx_end', command=f'{cmd:02X}', raw=raw)
                     deadline = time.monotonic()+self.COMMAND_TIMEOUT
                     while self.ack is None:
                         if not cleanup:
@@ -214,6 +215,8 @@ class Hkh11cDevice:
                     frames = self.parser.feed(data, chunk_id, stamp)
                     for frame in frames:
                         if frame.command == 0xA0:
+                            if self.samples == 0:
+                                self._event('first_sample', stamp=frame.rx_ns, raw_offset=frame.raw_offset, raw=frame.raw)
                             value = frame.value
                             range_ok = value <= 1023
                             rail = value in (0, 1023)
@@ -266,6 +269,7 @@ class Hkh11cDevice:
                         observed_hz=(self.samples-1)/span if span else None,
                         phase_stats={key:dict(value) for key,value in self.phase_stats.items()},
                         first_rx_monotonic_ns=self.first_ns, last_rx_monotonic_ns=self.last_ns,
+                        last_valid_rx_monotonic_ns=self.last_valid_ns,
                         stop_acknowledged=self.stop_acknowledged,
                         **self.parser.statistics(), error=self.error)
 

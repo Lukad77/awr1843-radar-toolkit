@@ -20,6 +20,19 @@ find_package(Threads REQUIRED)
 #   跨线程严格 FIFO）、连续内存 FrameBuffer、BufferPool 复用、RadarConfig 派生/校验。
 # ==========================================================================
 set(NEWSRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(radar_replay_extract
+    ${NEWSRC_DIR}/tools/radar_replay_extract.cpp
+    ${NEWSRC_DIR}/core/RadarConfig.cpp
+    ${NEWSRC_DIR}/transport/MmwaveCfg.cpp
+    ${NEWSRC_DIR}/pipeline/ParseStage.cpp
+    ${NEWSRC_DIR}/dsp/RangeFftStage.cpp
+    ${NEWSRC_DIR}/dsp/Fft.cpp
+    ${NEWSRC_DIR}/dsp/PhaseUnwrapStage.cpp)
+target_include_directories(radar_replay_extract PRIVATE ${NEWSRC_DIR})
+target_link_libraries(radar_replay_extract PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(radar_replay_extract PRIVATE shell32)
+endif()
 if(WIN32)
     add_executable(radar_capture
         ${NEWSRC_DIR}/tools/radar_capture_windows.cpp

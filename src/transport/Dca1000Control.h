@@ -24,6 +24,7 @@
 #endif
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,8 @@ bool resolveIpv4(const std::string &ip, int port, sockaddr_in &out,
                  std::string &err);
 
 struct Dca1000LinkOptions {
+  // Optional diagnostic events around Windows serial writes and accepted replies.
+  std::function<void(const std::string &)> trace;
   std::string bindIp = "0.0.0.0";       // 本机绑定地址（命令口）
   std::string dcaIp = "192.168.33.180"; // DCA1000 地址
   int configPort = 4096;                // DCA1000 命令端口

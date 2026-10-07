@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 let token = '', pending = false, connected = false, latest = {state:'idle'};
-const names = {idle:'待采集',starting:'正在配置',recording:'采集中',stopping:'正在保存',completed:'已完成',failed:'采集异常'};
-const tips = {idle:'等待开始',starting:'正在打开设备并下发 CFG，请稍候。',recording:'正在接收并保存雷达原始数据。',stopping:'正在停止设备并写入统计，请勿关闭服务。',completed:'本次采集已结束并保存。',failed:'请查看错误日志；已接收的数据保留在会话目录。'};
+const names = {idle:'待采集',starting:'准备与预采集',recording:'采集中',stopping:'正在保存',completed:'已完成',failed:'采集异常'};
+const tips = {idle:'等待开始',starting:'正在配置设备并等待两路稳定出数，正式计时尚未开始。',recording:'已建立共同 T₀，正在正式采集。',stopping:'正在停止设备并写入统计，请勿关闭服务。',completed:'本次采集已结束并保存。',failed:'请查看错误日志；已接收的数据保留在会话目录。'};
 function controls(){
   const active = ['starting','recording','stopping'].includes(latest.state);
   $('start').disabled = pending || !connected || active;
@@ -20,11 +20,13 @@ function render(s){
   latest=s; $('state').textContent=names[s.state] || s.state; $('state').dataset.state=s.state;
   $('frames').textContent=Number(s.frames).toLocaleString(); $('size').textContent=(s.bytes/1048576).toFixed(1)+' MB';
   $('statusText').textContent=tips[s.state] || '';
+  const w=s.formalWindow;
+  $('windowInfo').textContent=w ? `共同 T₀ 已记录；正式 ${s.frames} 帧 / 全部 ${s.totalFrames} 帧${w.end_ns ? '，T₁ 已确定' : ''}。正式索引与原始数据分别保存。` : `预采集 ${s.totalFrames || 0} 帧；稳定后自动确定共同 T₀。`;
   if(s.directory) $('directory').textContent=s.directory;
   $('missing').textContent=s.result.missingPackets ?? '—'; $('discarded').textContent=s.result.discardedFrames ?? '—';
   $('logs').textContent=s.logs.join('\n') || '等待设备日志…';
   $('beltStatus').hidden=!s.belt;
-  if(s.belt){const b=s.belt, q=b.phase_stats?.formal || {};
+  if(s.belt){const b=s.belt, q=b.formal_window_stats || b.phase_stats?.formal || {};
     const phases={prepare:'连接确认',warmup:'稳定段',ready:'等待雷达',formal:'正式采集',tail:'排空尾部',stopping:'已停止采样'};
     $('beltSummary').textContent=`${b.port || ''} · ${phases[b.phase] || b.phase} · ${b.samples || 0} 个样本 · 当前值 ${b.latest ?? '—'} · 档位 ${b.gain_commanded ?? '—'}`;
     $('beltRails').textContent=q.rail_hits ?? 0; $('beltRange').textContent=q.out_of_range ?? 0; $('beltChecks').textContent=b.checksum_errors ?? 0;
@@ -36,7 +38,7 @@ function render(s){
 $('form').addEventListener('submit',async e=>{
   e.preventDefault();pending=true;controls();$('message').textContent='';
   const data={}; ['cfgPath','serial','bindIp','dcaIp','belt'].forEach(k=>data[k]=$(k).value.trim());
-  ['dataPort','configPort','packetDelayUs','lvdsLanes','maxFrames'].forEach(k=>data[k]=Number($(k).value));
+  ['dataPort','configPort','packetDelayUs','lvdsLanes','maxFrames','durationSeconds'].forEach(k=>data[k]=Number($(k).value));
   if(data.belt){data.beltPort=$('beltPort').value;data.beltGain=Number($('beltGain').value);}
   try{render(await api('/api/start',data));}catch(e){$('message').textContent=e.message;}finally{pending=false;controls();}
 });

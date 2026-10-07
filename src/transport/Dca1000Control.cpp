@@ -118,13 +118,18 @@ void serialCommand(int fd, const std::string &line, int timeoutMs = 3000) {
 }
 
 #else
-void serialCommand(HANDLE fd, const std::string &line, int timeoutMs = 3000) {
+void serialCommand(HANDLE fd, const std::string &line, int timeoutMs,
+                   const std::function<void(const std::string &)> &trace) {
+  const std::string tag=line=="sensorStart"?"SENSOR_START":line=="sensorStop"?"SENSOR_STOP":"";
+  auto note=[&](const char *suffix){if(trace&&!tag.empty())trace(tag+suffix);};
   if (fd == INVALID_HANDLE_VALUE) throw std::runtime_error("serial is not open");
   PurgeComm(fd, PURGE_RXCLEAR);
   const std::string command = line + "\n";
   DWORD written = 0;
+  note("_TX_BEGIN");
   if (!WriteFile(fd, command.data(), static_cast<DWORD>(command.size()), &written, nullptr) || written != command.size())
     throw std::runtime_error("serial write failed: " + line);
+  note("_TX_END");
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
   auto last = std::chrono::steady_clock::now();
   std::string reply;
@@ -137,7 +142,9 @@ void serialCommand(HANDLE fd, const std::string &line, int timeoutMs = 3000) {
       if (reply.find("Error") != std::string::npos || reply.find("not recognized") != std::string::npos ||
           reply.find("Unknown") != std::string::npos || reply.find("Invalid") != std::string::npos)
         throw std::runtime_error("radar rejected " + line + ": " + printable(reply));
+      const bool wasAck=ack;
       ack = reply.find("Done") != std::string::npos || reply.find("Ignored") != std::string::npos;
+      if(ack&&!wasAck)note("_RESPONSE");
       if (ack && reply.find(":/>") != std::string::npos) break;
       if (reply.size() > 8192) throw std::runtime_error("serial reply too long");
     } else {
@@ -326,13 +333,17 @@ void Dca1000Control::stopRecording() {
 }
 
 void Dca1000Control::sendSerial(const std::string &line, int timeoutMs) {
+#ifdef _WIN32
+  serialCommand(serial_, line, timeoutMs, o_.trace);
+#else
   serialCommand(serial_, line, timeoutMs);
+#endif
 }
 
 bool Dca1000Control::tryStopRadar(int attempts, int timeoutMs) {
   for (int attempt = 1; attempt <= attempts; ++attempt) {
     try {
-      serialCommand(serial_, "sensorStop", timeoutMs);
+      sendSerial("sensorStop", timeoutMs);
       radarStarted_ = false;
       return true;
     } catch (const std::exception &e) {
@@ -366,12 +377,12 @@ bool Dca1000Control::stopRadarBestEffort(int attempts, int timeoutMs) {
 }
 
 void Dca1000Control::sendCfgCommands(const std::vector<std::string> &commands) {
-  for (const auto &line : commands) serialCommand(serial_, line);
+  for (const auto &line : commands) sendSerial(line);
 }
 
 void Dca1000Control::radarStart() {
   radarStarted_ = true;
-  serialCommand(serial_, "sensorStart");
+  sendSerial("sensorStart");
 }
 
 void Dca1000Control::shutdownQuietly() {
@@ -383,7 +394,7 @@ void Dca1000Control::shutdownQuietly() {
     std::cerr << "DCA stop failed: " << e.what() << '\n';
   }
   try {
-    if (radarStarted_ && !radarStopTried_) serialCommand(serial_, "sensorStop");
+    if (radarStarted_ && !radarStopTried_) sendSerial("sensorStop");
   } catch (const std::exception &e) {
     std::cerr << "sensorStop (final attempt) failed: " << e.what() << '\n';
   }

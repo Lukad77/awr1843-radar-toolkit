@@ -1,0 +1,3 @@
+# Optional offline waveform audit; no changes to live radar-only dependencies.
+numpy>=1.24,<3
+scipy>=1.10,<2
